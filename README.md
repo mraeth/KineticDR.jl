@@ -13,15 +13,21 @@ Phys. Plasmas **33**, 082505 (2026)) live in a separate repository, `ibw_dispers
 
 ## Install and test
 
-Not registered. With the repository checked out:
+Registered in [BSLRegistry](https://gitlab.mpcdf.mpg.de/bsl6d/BSLRegistry):
+
+```julia
+pkg> registry add https://gitlab.mpcdf.mpg.de/bsl6d/BSLRegistry.git
+pkg> add KineticDR
+```
+
+Development, with the repository checked out:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. test/runtests.jl
 ```
 
-From another environment: `Pkg.add(url = "https://github.com/mraeth/KineticDR.jl")`, or
-`Pkg.develop(path = "<checkout>")` for a local clone.
+`Pkg.develop(path = "<checkout>")` uses a local clone from another environment.
 
 ## Usage
 
