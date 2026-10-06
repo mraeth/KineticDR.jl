@@ -38,13 +38,37 @@ Nonadiabatic response of species `s` (Maeyama Eq. 8–10: Σ_ℓ W_ℓsk), from 
 Gordeyev sum in the species' own units (frequencies in |Ω_s|, lengths in ρ_ts).
 """
 function nonadiabatic_response(s::Species, ω, k::Wavevector)
-    Ω = abs(cyclotron_frequency(s))
-    ρ = thermal_gyroradius(s)
-    vt = thermal_speed(s)
-    ks = Wavevector(k.kx * ρ, k.ky * ρ, k.kz * vt / Ω)          # k⊥ρ_ts, k∥ v_ts/|Ω_s|
+    Ω, ks = _species_units(s, k)
     ωn = (s.T / s.q) * k.ky * s.κn / Ω                           # ω_*s / |Ω_s|
     ωT = (s.T / s.q) * k.ky * s.κT / Ω                           # ω_*Ts / |Ω_s|
     return nonadiabatic_response(s.response, ω / Ω, ks, ωn, ωT)
+end
+
+# |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|.
+function _species_units(s::Species, k::Wavevector)
+    Ω = abs(cyclotron_frequency(s))
+    ρ = thermal_gyroradius(s)
+    return Ω, Wavevector(k.kx * ρ, k.ky * ρ, k.kz * thermal_speed(s) / Ω)
+end
+
+"""
+    susceptibility(s, ω, k) -> χ̃_s (3×3)
+
+Susceptibility of species `s` in units of ω_pi²/Ω_i², b̂ = ẑ, k = (kx, 0, kz):
+χ̃_s = (q² N/m)/ω² · M(ω/|Ω_s|, k in species units), with M from `susceptibility(s.response, ...)`.
+Negative charge (opposite gyration) is the mirror image y → -y, kx < 0 the rotation by π about ẑ.
+Homogeneous background only: gradients throw.
+"""
+function susceptibility(s::Species, ω, k::Wavevector)
+    k.ky == 0 || throw(ArgumentError("electromagnetic responses need k = (kx, 0, kz), got ky = $(k.ky)"))
+    (s.κn == 0 && s.κT == 0) ||
+        throw(ArgumentError("electromagnetic responses have no gradient drive; species has κn = $(s.κn), κT = $(s.κT)"))
+    Ω, ks = _species_units(s, k)
+    M = susceptibility(s.response, ω / Ω, Wavevector(abs(ks.kx), 0.0, ks.kz))
+    fy = s.q < 0 ? -1 : 1                                         # mirror y -> -y
+    fx = k.kx < 0 ? -1 : 1                                        # rotation by π: x, y -> -x, -y
+    F = SVector(fx, fx * fy, 1)
+    return (s.q^2 * s.N / s.m) / ω^2 * (F .* M .* transpose(F))
 end
 
 "Charge response q_s δn_s/φ in units e N_i/T_i: (q² N/T)(W − 1)."
