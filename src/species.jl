@@ -44,8 +44,11 @@ function nonadiabatic_response(s::Species, ω, k::Wavevector)
     ks = Wavevector(k.kx * ρ, k.ky * ρ, k.kz * vt / Ω)          # k⊥ρ_ts, k∥ v_ts/|Ω_s|
     ωn = (s.T / s.q) * k.ky * s.κn / Ω                           # ω_*s / |Ω_s|
     ωT = (s.T / s.q) * k.ky * s.κT / Ω                           # ω_*Ts / |Ω_s|
-    return nonadiabatic_response(s.response, ω / Ω, ks, ωn, ωT)
+    return nonadiabatic_response(own_units(s.response, s), ω / Ω, ks, ωn, ωT)
 end
+
+"Hook: the response with any lab-unit parameters expressed in the species' own units (default: unchanged)."
+own_units(r::AbstractResponse, ::Species) = r
 
 "Charge response q_s δn_s/φ in units e N_i/T_i: (q² N/T)(W − 1)."
 charge_response(s::Species, ω, k::Wavevector) =

@@ -4,16 +4,20 @@ authors = ["Mario Raeth"]
 version = "0.1.0"
 
 [deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PlasmaCore = "c7b9d4a2-5e8f-4b63-9a1d-3f7e2c810da5"
 QuadGK = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 
 [compat]
+LinearAlgebra = "1"
+PlasmaCore = "0.1.0"
 QuadGK = "2"
 SpecialFunctions = "2"
 julia = "1.10"
 
 [extras]
-Test = "8dfed614-e22c-5e08-85e1-65bab5da0ebc"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test"]

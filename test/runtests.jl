@@ -1,6 +1,8 @@
 using Test
 using KineticDR
 using QuadGK: quadgk
+using LinearAlgebra: norm
+using PlasmaCore: ScalarField
 
 const KD = KineticDR
 
@@ -188,4 +190,92 @@ end
     r2, ok2 = find_root(z -> dispersion(mp, 1e-3 * z, kp), 1040 + 7im; δ = 1.0)
     @test ok2
     @test r2 * 1e-3 ≈ r rtol = 1e-8
+end
+
+@testset "quadratic average" begin
+    brute(n0, n2, a, b, e) = quadgk(s -> exp(-s^2 / 2) / sqrt(2π) * (n0 + n2 * s^2) / (a * s^2 - b * s + e),
+                                    -12, 12; rtol = 1e-12, atol = 0)[1]
+    for (a, b, e) in ((0.01, 0.02, 0.01 + 0.01im), (-0.02, 0.05, -0.03 + 0.002im),
+                      (0.05, 0.0, 0.02 + 0.02im), (0.01, 0.02, -0.04 + 0.01im))
+        @test KD.quadratic_average(0.3 + 0.1im, -0.15, a, b, e) ≈ brute(0.3 + 0.1im, -0.15, a, b, e) rtol = 1e-10
+    end
+    # a → 0 is the linear-denominator moments
+    I0, I2 = KD.linear_moments(0.02 + 0.01im, 0.03)
+    @test KD.quadratic_average(0.3, 0.1, 1e-9, 0.03, 0.02 + 0.01im) ≈ 0.3 * I0 + 0.1 * I2 rtol = 1e-6
+    # analytic across Im e = 0 (the labelling of the roots is by continuation): complex derivative
+    # along the real and imaginary direction agree, also with Im e < 0
+    f(e) = KD.quadratic_average(0.3, 0.1, 0.01, 0.02, e)
+    for e0 in (0.02 + 0.0im, 0.03 - 0.004im, -0.01 + 0.0im)
+        h = 1e-6
+        @test (f(e0 + h) - f(e0 - h)) / 2h ≈ (f(e0 + im * h) - f(e0 - im * h)) / (2im * h) rtol = 1e-5
+    end
+end
+
+@testset "gyrokinetic drift response" begin
+    ky, R0, ω = 0.5, 50.0, -0.03 + 0.01im
+    k = Wavevector(ky = ky, kz = 0.02)
+    for alpha in (0.0, 1.0)
+        s = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 1 / R0, alpha = alpha, nmu = 200))
+        # independent: direct double quadrature in (s, μ), Im ω > 0
+        W = quadgk(μ -> exp(-μ) * KD.besselj0(ky * sqrt(2μ))^2 * quadgk(v -> begin
+                ωD = -ky * (v^2 + μ) / R0
+                ωs = ky * (-0.04 + -0.16 * (μ + v^2 / 2 - 1.5))
+                exp(-v^2 / 2) / sqrt(2π) * (ω - alpha * ωD - ωs) / (ω - k.kz * v - ωD)
+            end, -12, 12; rtol = 1e-11)[1], 0, 40; rtol = 1e-9)[1]
+        @test nonadiabatic_response(s, ω, k) ≈ W rtol = 1e-6
+    end
+    # c → 0 is Gyrokinetic
+    g = Species(κT = -0.3, response = Gyrokinetic())
+    d = Species(κT = -0.3, response = GyrokineticDrift(c = 1e-12, nmu = 32))
+    @test nonadiabatic_response(d, ω, k) ≈ nonadiabatic_response(g, ω, k) rtol = 1e-9
+    # local roots (R/L_T = 8, R/L_n = 2) are valid solutions of D, reproduced by the radial operator below
+    for (alpha, ref) in ((0.0, -0.0289898331 + 0.0130943411im), (1.0, -0.0216328565 + 0.0162489625im))
+        ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, alpha = alpha, nmu = 160))
+        m = Model((ion, adiabatic_electrons()), Quasineutrality())
+        ω0 = find_modes(m, Wavevector(ky = 0.5); re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
+        @test ω0 ≈ ref atol = 1e-8
+    end
+end
+
+@testset "radial operator" begin
+    mg = radial_grid(-20, 20, 40; bc = :mirror)
+    rgrid = (-0.08:0.01:0.0, (0.002, 0.01, 0.02))
+    # uniform k∥: the operator is singular at the local root with a flat null vector
+    for kz in (0.01, 0.02)
+        m = RadialModel(; ky = 0.5, kpar = x -> kz, κT = x -> -0.3)
+        loc = find_modes(local_model(m, 0.0)...; re = rgrid[1], imag = rgrid[2], imin = 0.0)[1]
+        λ, φ = KD.smallest(operator(mg, m, loc))
+        @test abs(λ) < 1e-10
+        @test maximum(abs.(φ ./ φ[1] .- 1)) < 1e-9
+    end
+    # uniform drift: the radial eigenvalue is the local root, α = 0 and 1
+    for alpha in (0.0, 1.0)
+        m = RadialModel(; ky = 0.5, drift = x -> 1 / 50, κT = x -> -8 / 50, κn = x -> -2 / 50, alpha)
+        loc = find_modes(local_model(m, 0.0)...; re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
+        r = eigenmode(mg, m, loc * 1.02)
+        @test r.converged
+        @test r.ω ≈ loc rtol = 1e-9
+    end
+    # sheared slab, L_s = 200, Dirichlet walls: converged against N and nμ
+    m = sheared_slab(; ky = 0.5, Ls = 200.0, κT = -0.3)
+    ref = eigenmode(radial_grid(-20, 20, 120), m, -0.0241 + 0.0034im)
+    @test ref.converged
+    @test ref.ω ≈ -0.024124 + 0.003427im atol = 2e-6
+    @test ref.φ isa ScalarField && length(ref.φ) == 120 && ref.φ[1] == 0
+    for (N, nmu) in ((80, 24), (80, 16), (80, 32))
+        r = eigenmode(radial_grid(-20, 20, N; nmu), m, -0.0241 + 0.0034im)
+        @test r.ω ≈ ref.ω atol = 1e-7
+    end
+    # the argument principle sees every eigenvalue, the seeded search only some
+    g = radial_grid(-20, 20, 80)
+    found = find_eigenmodes(g, m; re = -0.04:0.005:0.0, im = 0.001:0.002:0.006)
+    inrect(ω) = -0.04 < real(ω) < 0 && 0.0005 < imag(ω) < 0.006
+    @test count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006) >= count(r -> inrect(r.ω), found) >= 1
+    # drift in the radial operator: A is analytic through the real axis (Im ω < 0 is the continuation):
+    # complex derivative along the real and the imaginary direction agree
+    md = RadialModel(; ky = 0.5, drift = x -> 1 / 50, κT = x -> -8 / 50)
+    ω0, h = -0.0123 + 0.0im, 1e-7
+    dA_re = (operator(mg, md, ω0 + h) - operator(mg, md, ω0 - h)) / 2h
+    dA_im = (operator(mg, md, ω0 + im * h) - operator(mg, md, ω0 - im * h)) / (2im * h)
+    @test norm(dA_re - dA_im) < 1e-4 * norm(dA_re)
 end

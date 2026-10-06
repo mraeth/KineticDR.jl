@@ -56,6 +56,34 @@ A new response is a subtype of `AbstractResponse` plus one `gordeyev` method.
 `charge_response` gives q_s δn_s/φ. Gradient scans (`gradient_coefficients`, `neutral_gradients`,
 `critical_kappaT`, `with_gradients`) act on species 1 unless `species = i` is given.
 
+## Magnetic drift and the radial eigenvalue problem
+
+```julia
+ion = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 1/50, alpha = 0.0))   # ω_D = -k_y (c v∥² + c⊥ v⊥²/2)
+find_modes(Model((ion, electron), Quasineutrality()), Wavevector(ky = 0.5); re = -0.06:0.01:0.0)
+
+g = radial_grid(-20, 20, 80; bc = :dirichlet)              # PlasmaCore Grid, one radial axis
+m = sheared_slab(; ky = 0.5, Ls = 200.0, κT = -0.3)        # or RadialModel(; ky, kpar, n, Ti, Te, κn, κT, B, drift, ...)
+r = eigenmode(g, m, -0.024 + 0.0034im)                     # (; ω, φ::ScalarField, λ, converged)
+find_eigenmodes(g, m; re = -0.07:0.002:0.0, im = 0.0005:0.001:0.012, starts = local_roots(m, 1:3:19; re = -0.08:0.01:0, imag = (0.002, 0.01)))
+count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006)         # argument principle on det A(ω)
+```
+
+- `GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 64)`: J₀² response with ω_D; the v∥ average is two Z
+  functions (`quadratic_average`), exact for any Im ω, so root finders work below the real axis. `alpha = 1` is
+  bslLD's prescribed drift. **Converge `nmu`** when ω_D ~ ω: the μ integrand has a pole at distance ~|ω/(k_y c⊥)| from
+  the real axis, error 1e-3 (nmu = 24), 1.4e-5 (80), 1e-9 (320) for k_y c = 0.01.
+- `RadialModel`: ion (q = m = 1) with profiles n(x), T_i(x), κn(x), κT(x), B(x), k∥(x), c(x); Boltzmann electrons T_e(x).
+  κ = +d ln/dx as everywhere here (bslLD's `add_kappaT!` uses the opposite sign). `local_model(m, x)` is the
+  homogeneous model at x; at uniform profiles the operator on the k_x = 0 mode is `dispersion` exactly.
+- Boundaries: `:dirichlet` (φ = 0 on the walls: unknowns on the N - 1 nodes after a, sine basis; the kinetic wall of
+  the bslLD runs) and `:mirror` (cell centres, cosine basis, even about both walls). Eigenvectors are `ScalarField`s
+  with one value per grid node.
+- `find_eigenmodes` is a seed search and can miss nearly degenerate modes; `count_eigenvalues` counts them
+  (L_s = 200 slab: 5 eigenvalues in a rectangle where the search finds 3).
+- Not exact: the radial operator drops cyclotron harmonics (≲ 1e-3 in γ in local tests); `operator` reuses a
+  workspace, so it is not thread-safe.
+
 Solvers: `muller`, `find_root` (model or any analytic function), `find_modes`, `harmonic_root`,
 `track_branch`, `count_roots` (argument principle).
 
@@ -74,8 +102,10 @@ src/types.jl       Wavevector, abstract types
 src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral; nonadiabatic_response kernel
 src/species.jl     Species, Model, charge_response, with_gradients
 src/fields.jl      Quasineutrality, Poisson, dispersion
+src/drift.jl       quadratic_average (v∥ average with drift), GyrokineticDrift
+src/radial.jl      RadialModel, RadialGrid, operator, eigenmode, find_eigenmodes, count_eigenvalues
 src/solve.jl       root finders and gradient scans
 test/runtests.jl   tests
 ```
 
-Not implemented: drift and toroidal terms, k_x ≠ 0 with shear, radial eigenvalue problem.
+Not implemented: drift in the full-orbit (`GordeyevSeries`) response, kinetic electrons in the radial problem, complex k_x.
