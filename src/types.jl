@@ -9,7 +9,7 @@ struct Wavevector{T<:Real}
     ky::T
     kz::T
 end
-Wavevector(; kx = 0.0, ky, kz = 0.0) = Wavevector(promote(float(kx), float(ky), float(kz))...)
+Wavevector(; kx = 0.0, ky = 0.0, kz = 0.0) = Wavevector(promote(float(kx), float(ky), float(kz))...)
 kperp(k::Wavevector) = hypot(k.kx, k.ky)
 
 abstract type AbstractResponse end

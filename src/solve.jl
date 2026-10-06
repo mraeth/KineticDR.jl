@@ -84,6 +84,9 @@ function track_branch(D::Function, ks::AbstractVector, ω0; δ = 1e-4, kwargs...
 end
 track_branch(m, ks::AbstractVector{<:Wavevector}, ω0; kwargs...) =
     track_branch((ω, k) -> dispersion(m, ω, k), ks, ω0; kwargs...)
+# a function with Wavevector parameters is not a model (resolves the ambiguity with the method above)
+track_branch(D::Function, ks::AbstractVector{<:Wavevector}, ω0; kwargs...) =
+    invoke(track_branch, Tuple{Function,AbstractVector,Any}, D, ks, ω0; kwargs...)
 
 """
     count_roots(f, re0, re1, im0, im1; maxdarg = 0.1) -> Int
