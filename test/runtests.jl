@@ -279,3 +279,45 @@ end
     dA_im = (operator(mg, md, ω0 + im * h) - operator(mg, md, ω0 - im * h)) / (2im * h)
     @test norm(dA_re - dA_im) < 1e-4 * norm(dA_re)
 end
+
+@testset "radial operator, Larmor harmonics" begin
+    # orbit phase: J_p φ equals the real-space gyrophase quadrature (nonuniform T, plane wave on the periodic grid)
+    g = radial_grid(0, 10.0, 40; bc = :periodic, nmu = 4)
+    T(x) = 1 + 0.4 * sin(2π * x / 10)
+    m = RadialModel(; ky = 1.3, Ti = T, pmax = 3)
+    mu, kk = 1.7, g.k[g.k .> 0][3]
+    φ(x) = cis(kk * x)
+    for p in (0, 1, -1, 2, -3)
+        J, _ = KD.gyroaverage(g, m, mu, p)
+        ex = map(g.x) do X
+            ρ = sqrt(2 * mu * T(X))
+            th = range(0, 2π, 400)[1:(end - 1)]
+            sum(cis(p * t) * φ(X - ρ * sin(t)) * cis(m.ky * ρ * cos(t)) for t in th) / length(th) * cis(-p * π / 2)
+        end
+        @test J * φ.(g.x) ≈ ex atol = 1e-12
+    end
+    # uniform profiles: A(ω) is singular at the full-orbit local root (PRL Eq. 9), p = 1…3, k_y ≤ 5; periodic x
+    pg = radial_grid(-20, 20, 24; bc = :periodic, nmu = 64)
+    for ky in (2.0, 5.0)
+        m = RadialModel(; ky, kpar = x -> 0.025, κT = x -> 0.34, κn = x -> 0.23, pmax = 8)
+        for p in 1:3
+            locs = filter(z -> abs(real(z) - p) < 0.4,
+                          find_modes(local_model(m, 0.0)...; re = (p - 0.3):0.1:(p + 0.3), imag = (0.002, 0.01), imin = 0.0))
+            loc = locs[argmax(Base.imag.(locs))]
+            @test abs(first(KD.smallest(operator(pg, m, loc)))) < 1e-9
+        end
+    end
+    # harmonics need the periodic basis
+    @test_throws ArgumentError KD.gyroaverage(radial_grid(0, 10.0, 20), RadialModel(; ky = 1.0, pmax = 1), 1.0, 1)
+    # v⊥ quadratures: moments of e^{-μ}; both reproduce the singular point of the uniform operator
+    for quad in (:laguerre, :legendre)
+        mu, w = KD.perp_quadrature(64, quad)
+        @test sum(w) ≈ 1 atol = 1e-12
+        @test sum(w .* mu) ≈ 1 atol = 1e-10
+        @test sum(w .* mu .^ 2) ≈ 2 atol = 1e-8
+    end
+    qg = radial_grid(-20, 20, 24; bc = :periodic, nmu = 96, quad = :legendre)
+    m = RadialModel(; ky = 5.0, kpar = x -> 0.025, κT = x -> 0.34, κn = x -> 0.23, pmax = 8)
+    loc = first(filter(z -> abs(real(z) - 1) < 0.4, find_modes(local_model(m, 0.0)...; re = 0.7:0.1:1.3, imag = (0.002, 0.01), imin = 0.0)))
+    @test abs(first(KD.smallest(operator(qg, m, loc)))) < 1e-9
+end

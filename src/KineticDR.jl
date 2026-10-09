@@ -10,7 +10,7 @@ module KineticDR
 
 using LinearAlgebra: SymTridiagonal, eigen, diagm, det, mul!
 using PlasmaCore: Grid, ScalarField
-using SpecialFunctions: erfcx, besselix, besselj0
+using SpecialFunctions: erfcx, besselix, besselj0, besselj
 using QuadGK: quadgk
 
 include("special.jl")

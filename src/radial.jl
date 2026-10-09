@@ -19,6 +19,11 @@ speed of the gradient drive (bslLD's `add_kappaT!` uses B = 1: pass `Bdrive = x 
 `kpar(x)` is k∥; `drift(x)` is c(x) in ω_D (e.g. `x -> 1/R0`, or `x -> 1/(B(x)(Rc + x))`);
 `drift_perp(x)` is a separate ∇B coefficient c⊥ (default `drift`). `κn`, `κT` are d ln n/dx and
 d ln T_i/dx; [`log_gradient`](@ref) derives them from profiles. `alpha` as in [`GyrokineticDrift`](@ref).
+
+`pmax = 0` is the gyrokinetic operator (J₀ only). `pmax > 0` adds the Larmor harmonics |p| ≤ pmax
+(full-orbit ions, the Gordeyev series of the PRL): harmonic p has the gyroaverage J_p(k⊥ρ_μ) with the
+orbit phase e^{-ip atan2(k_x, k_y)} and the resonant denominator ω - pB - k∥v∥; the `1` of
+quasineutrality is not truncated. Needs `drift = 0`.
 """
 Base.@kwdef struct RadialModel{F1,F2,F3,F4,F5,F6,F7,F8,F9,F10}
     ky::Float64
@@ -33,6 +38,7 @@ Base.@kwdef struct RadialModel{F1,F2,F3,F4,F5,F6,F7,F8,F9,F10}
     Bdrive::F9 = B
     drift_perp::F10 = drift
     alpha::Float64 = 0.0
+    pmax::Int = 0
 end
 
 "Reduced magnetic shear: k∥ = k_y x / L_s + k_z, uniform gradients."
@@ -51,7 +57,12 @@ is the radial operator at uniform profiles. Needs B = B_drive = 1 (KineticDR has
 function local_model(m::RadialModel, x)
     (m.B(x) == 1 && m.Bdrive(x) == 1) || throw(ArgumentError("local_model needs B(x) = Bdrive(x) = 1"))
     c, cp = m.drift(x), m.drift_perp(x)
-    response = c == 0 && cp == 0 ? Gyrokinetic() : GyrokineticDrift(; c, cperp = cp, alpha = m.alpha)
+    if m.pmax > 0
+        (c == 0 && cp == 0) || throw(ArgumentError("pmax > 0 (full orbit) needs drift = 0"))
+        response = GordeyevSeries(; pmax = m.pmax)
+    else
+        response = c == 0 && cp == 0 ? Gyrokinetic() : GyrokineticDrift(; c, cperp = cp, alpha = m.alpha)
+    end
     ion = Species(; T = m.Ti(x), N = m.n(x), κn = m.κn(x), κT = m.κT(x), response)
     electron = Species(; q = -1, T = m.Te(x), N = m.n(x), response = Boltzmann())
     return Model((ion, electron), Quasineutrality()), Wavevector(ky = m.ky, kz = m.kpar(x))
@@ -65,28 +76,42 @@ Radial discretisation on the first spatial axis of a PlasmaCore `Grid` (nodes a 
 δ = (b - a)/N, so N nodes on [a, b)); `radial_grid` builds the one-axis grid.
 - `bc = :dirichlet`: φ = 0 on the walls a and b; unknowns on the N - 1 nodes after a, sine basis
   sin(π m (x - a)/L). This is the kinetic wall of the bslLD runs, whose eigenmodes vanish there.
+- `bc = :periodic`: N unknowns at the nodes a + (j-1)δ, plane-wave basis exp(i k (x - a)), k = 2π m/L (needs an
+  even N and periodic profiles). The only basis that carries the orbit phase of the Larmor harmonics p ≠ 0
+  (`RadialModel.pmax > 0`): in a standing-wave basis (`:dirichlet`, `:mirror`) it leaves the basis and aliases.
 - `bc = :mirror`: unknowns at the cell centres x_j + δ/2 (N of them), cosine basis, even about both
   walls (bslLD's `Mirror()` halo). Admits wall-localised modes the simulation does not have.
-`nmu` Gauss–Laguerre nodes in μ (converge it when ω_D ~ ω, see [`GyrokineticDrift`](@ref)). Eigenvectors are returned as `ScalarField`s with one value per grid node
-(zero at the wall node for Dirichlet; cell centres for mirror).
+`nmu` nodes in μ: `quad = :laguerre` (Gauss–Laguerre; converge it when ω_D ~ ω, see [`GyrokineticDrift`](@ref), and for the harmonics at large k⊥ρ) or `quad = :legendre` (Gauss–Legendre in v⊥ = √(2μ), much better for oscillatory J_p²). Eigenvectors are returned as `ScalarField`s with one value per grid node
+(zero at the wall node for Dirichlet; cell centres for mirror; the nodes for periodic).
 """
+# ∫₀^∞ e^{-μ} f(μ) dμ nodes and weights: Gauss–Laguerre in μ, or Gauss–Legendre in u = √(2μ) on [0, 7.5]
+# (∫ e^{-u²/2} u f du; resolves the oscillation of J_p²(k√(2μ T)) at large k⊥ρ with far fewer nodes).
+function perp_quadrature(n, quad)
+    quad === :laguerre && return gauss_laguerre(n)
+    quad === :legendre || throw(ArgumentError("quad must be :laguerre or :legendre, got $quad"))
+    E = eigen(SymTridiagonal(zeros(n), [k / sqrt(4k^2 - 1) for k in 1:(n - 1)]))
+    umax = 7.5
+    u = umax / 2 .* (E.values .+ 1)
+    return u .^ 2 ./ 2, umax / 2 .* E.vectors[1, :] .^ 2 .* 2 .* exp.(-u .^ 2 ./ 2) .* u
+end
+
 struct RadialGrid{G}
     grid::G
     bc::Symbol
     x::Vector{Float64}          # nodes carrying unknowns
     k::Vector{Float64}          # basis wavenumbers π m / L
-    C::Matrix{Float64}          # C[j, m] = basis_m(x_j)
-    Cinv::Matrix{Float64}
+    C::Matrix                   # C[j, m] = basis_m(x_j) (complex for :periodic)
+    Cinv::Matrix
     w::Vector{Float64}          # quadrature weights (uniform: the bases are orthogonal on the nodes)
     mu::Vector{Float64}
     wmu::Vector{Float64}
 end
 
-function RadialGrid(grid; bc = :dirichlet, nmu = 64)
+function RadialGrid(grid; bc = :dirichlet, nmu = 64, quad = :laguerre)
     ax = grid.xaxes[1]
     N, h, a = length(ax), step(ax), first(ax)
     L = N * h
-    mu, wmu = gauss_laguerre(nmu)
+    mu, wmu = perp_quadrature(nmu, quad)
     if bc === :mirror
         x = collect(ax) .+ h / 2
         k = [π * m / L for m in 0:(N - 1)]
@@ -95,8 +120,14 @@ function RadialGrid(grid; bc = :dirichlet, nmu = 64)
         x = collect(ax)[2:end]
         k = [π * m / L for m in 1:(N - 1)]
         C = [sin(k[m] * (x[j] - a)) for j in 1:(N - 1), m in 1:(N - 1)]
+    elseif bc === :periodic
+        iseven(N) || throw(ArgumentError("bc = :periodic needs an even N"))
+        x = collect(ax)
+        k = [2π * m / L for m in (-N ÷ 2):(N ÷ 2 - 1)]
+        C = [cis(k[m] * (x[j] - a)) for j in 1:N, m in 1:N]
+        return RadialGrid(grid, bc, x, k, C, C' / N, fill(h, N), mu, wmu)
     else
-        throw(ArgumentError("bc must be :mirror or :dirichlet, got $bc"))
+        throw(ArgumentError("bc must be :mirror, :dirichlet or :periodic, got $bc"))
     end
     return RadialGrid(grid, bc, x, k, C, inv(C), fill(h, length(x)), mu, wmu)
 end
@@ -105,46 +136,72 @@ radial_grid(a, b, N; kw...) = RadialGrid(Grid([float(a)], [float(b)], [Int(N)], 
 
 "φ on the unknown nodes as a `ScalarField` over the grid axis."
 function radial_field(g::RadialGrid, φ::AbstractVector)
-    return ScalarField(g.bc === :mirror ? Vector(φ) : vcat(zero(eltype(φ)), φ))
+    return ScalarField(g.bc === :dirichlet ? vcat(zero(eltype(φ)), φ) : Vector(φ))
 end
 
-# Gyroaverage J_μ (nodes -> guiding centres) and its adjoint in the quadrature inner product.
-function gyroaverage(g::RadialGrid, m::RadialModel, mu)
+# Gyroaverage J_{μ,p} (nodes -> guiding centres) and its adjoint in the quadrature inner product.
+# Orbit of an ion in B = +z: ρ = ρ(-sin ϑ, cos ϑ), ϑ̇ = -Ω, so harmonic p of e^{i k·ρ} is i^p J_p(k⊥ρ) e^{-ip φ_k}
+# with φ_k = atan2(k_x, k_y) (denominator ω - pΩ after relabelling p -> -p; the i^p cancels with the
+# adjoint). A standing-wave basis function sin/cos(k (x - a)) is the pair k_x = ±k, φ_{-k} = -φ_k, which
+# gives sin/cos(k (x - a) - p φ_k): real, so J stays a real matrix.
+function gyroaverage(g::RadialGrid, m::RadialModel, mu, p::Integer = 0)
     N = length(g.x)
+    a = first(g.grid.xaxes[1])
+    trig = g.bc === :mirror ? cos : sin
     G = similar(g.C)
+    p != 0 && g.bc !== :periodic && throw(ArgumentError("Larmor harmonics p ≠ 0 need bc = :periodic"))
     for j in 1:N
         ρ = sqrt(2 * mu * m.Ti(g.x[j])) / m.B(g.x[j])
         for i in 1:N
-            G[j, i] = g.C[j, i] * besselj0(sqrt(g.k[i]^2 + m.ky^2) * ρ)
+            z = sqrt(g.k[i]^2 + m.ky^2) * ρ
+            G[j, i] = p == 0 ? g.C[j, i] * besselj0(z) :
+                      g.bc === :periodic ? g.C[j, i] * cis(-p * atan(g.k[i], m.ky)) * besselj(p, z) :
+                      trig(g.k[i] * (g.x[j] - a) - p * atan(g.k[i], m.ky)) * besselj(p, z)
         end
     end
     J = G * g.Cinv
     return J, J'
 end
 
-# ⟨(ω - α ω_D - ω_*)/(ω - k∥ v∥ - ω_D)⟩ over v∥ at one μ and radius X
-function vpar_response(m::RadialModel, X, ω, mu)
+# ⟨(ω - α ω_D - ω_*)/(ω - pB - k∥ v∥ - ω_D)⟩ over v∥ at one μ and radius X, harmonic p
+function vpar_response(m::RadialModel, X, ω, mu, p::Integer = 0)
     T = m.Ti(X)
     dia = m.ky * T / m.Bdrive(X)
     c, cp = m.drift(X), m.drift_perp(X)
     a = m.ky * T * c
     n0 = ω - dia * (m.κn(X) + m.κT(X) * (mu - 1.5)) + m.alpha * m.ky * T * cp * mu
     n2 = -dia * m.κT(X) / 2 + m.alpha * a
-    return quadratic_average(n0, n2, a, abs(m.kpar(X)) * sqrt(T), ω + m.ky * T * cp * mu)
+    return quadratic_average(n0, n2, a, abs(m.kpar(X)) * sqrt(T), ω - p * m.B(X) + m.ky * T * cp * mu)
 end
 
-struct RadialWorkspace
-    J::Vector{Matrix{Float64}}
-    Jt::Vector{Matrix{Float64}}
-    re::Matrix{Float64}      # real/imaginary parts of the accumulating operator (J real: two real gemms)
+struct RadialWorkspace{T}
+    J::Vector{Matrix{T}}
+    Jt::Vector{Matrix{T}}
+    re::Matrix{Float64}      # real J: real/imaginary parts of the accumulating operator (two real gemms)
     im::Matrix{Float64}
-    t1::Matrix{Float64}
+    t1::Matrix{T}
+    acc::Matrix{ComplexF64}  # complex J: accumulator
 end
 
 function RadialWorkspace(g::RadialGrid, m::RadialModel)
-    pairs = [gyroaverage(g, m, mu) for mu in g.mu]
+    pairs = [gyroaverage(g, m, mu, p) for p in -m.pmax:m.pmax for mu in g.mu]   # index (p + pmax) * nmu + q
     N = length(g.x)
-    return RadialWorkspace(first.(pairs), last.(pairs), zeros(N, N), zeros(N, N), zeros(N, N))
+    J = [Matrix(first(q)) for q in pairs]
+    Jt = [Matrix(last(q)) for q in pairs]
+    T = eltype(first(J))
+    return RadialWorkspace{T}(J, Jt, zeros(N, N), zeros(N, N), zeros(T, N, N), zeros(ComplexF64, N, N))
+end
+
+# ws += -J† diag(d) J
+function accumulate!(ws::RadialWorkspace{Float64}, d, i)
+    ws.t1 .= real.(d) .* ws.J[i]
+    mul!(ws.re, ws.Jt[i], ws.t1, -1, 1)
+    ws.t1 .= Base.imag.(d) .* ws.J[i]
+    mul!(ws.im, ws.Jt[i], ws.t1, -1, 1)
+end
+function accumulate!(ws::RadialWorkspace{ComplexF64}, d, i)
+    ws.t1 .= d .* ws.J[i]
+    mul!(ws.acc, ws.Jt[i], ws.t1, 1, 1)
 end
 
 """
@@ -156,14 +213,14 @@ function operator(g::RadialGrid, m::RadialModel, ω::Number, ws = RadialWorkspac
     X = g.x
     fill!(ws.re, 0)
     fill!(ws.im, 0)
-    for (q, mu) in enumerate(g.mu)
-        d = [g.wmu[q] * m.n(x) / m.Ti(x) * vpar_response(m, x, ω, mu) for x in X]
-        ws.t1 .= real.(d) .* ws.J[q]
-        mul!(ws.re, ws.Jt[q], ws.t1, -1, 1)
-        ws.t1 .= Base.imag.(d) .* ws.J[q]
-        mul!(ws.im, ws.Jt[q], ws.t1, -1, 1)
+    fill!(ws.acc, 0)
+    nmu = length(g.mu)
+    for p in -m.pmax:m.pmax, (q, mu) in enumerate(g.mu)
+        i = (p + m.pmax) * nmu + q
+        d = [g.wmu[q] * m.n(x) / m.Ti(x) * vpar_response(m, x, ω, mu, p) for x in X]
+        accumulate!(ws, d, i)
     end
-    A = complex.(ws.re, ws.im)
+    A = eltype(ws.J[1]) <: Complex ? -ws.acc : complex.(ws.re, ws.im)
     for (j, x) in enumerate(X)
         A[j, j] += m.n(x) / m.Te(x) + m.n(x) / m.Ti(x)
     end
