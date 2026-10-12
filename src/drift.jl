@@ -36,9 +36,18 @@ sqrt_cut(z) = (r = sqrt(-im * z); r * sqrt(complex(im)))
 function linear_moments(ω, q)
     q = abs(q)
     ζ = ω / (sqrt(2.0) * q)
-    if !(abs(ζ) < 6)                              # also q == 0: asymptotic series
-        r = (q / ω)^2
-        return (1 + r * (1 + r * (3 + 15r))) / ω, (1 + r * (3 + r * (15 + 105r))) / ω
+    if !(abs(ζ) < 6)                              # also q == 0: asymptotic series Σ (2n∓1)!! r^n, summed to
+        r = (q / ω)^2                             # its smallest term (≲ e^{-36} at |ζ| = 6; Landau term dropped)
+        t0, t2 = one(r), one(r)
+        s0, s2 = t0, t2
+        for n in 1:40
+            t0 *= (2n - 1) * r
+            t2 *= (2n + 1) * r
+            s0 += t0
+            s2 += t2
+            abs(t2) < 1e-17 * abs(s2) && break
+        end
+        return s0 / ω, s2 / ω
     end
     I0 = -plasma_Z(ζ) / (sqrt(2.0) * q)
     return I0, (ω / q)^2 * I0 - ω / q^2

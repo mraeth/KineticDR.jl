@@ -321,3 +321,69 @@ end
     loc = first(filter(z -> abs(real(z) - 1) < 0.4, find_modes(local_model(m, 0.0)...; re = 0.7:0.1:1.3, imag = (0.002, 0.01), imin = 0.0)))
     @test abs(first(KD.smallest(operator(qg, m, loc)))) < 1e-9
 end
+
+@testset "radial operator, analytic μ integral and exact adiabatic term" begin
+    # Weber's second integral, real and complex arguments (complex: the symbol test below)
+    for (p, a, b) in ((0, 1.3, 0.7), (3, 5.0, 4.2), (2, 1.1 + 0.3im, 1.1 - 0.3im))
+        W0 = quadgk(μ -> exp(-μ) * KD.besselj(p, a * sqrt(2μ)) * KD.besselj(p, b * sqrt(2μ)), 0, 80; rtol = 1e-13)[1]
+        W1 = quadgk(μ -> μ * exp(-μ) * KD.besselj(p, a * sqrt(2μ)) * KD.besselj(p, b * sqrt(2μ)), 0, 80; rtol = 1e-13)[1]
+        @test KD.weber(p, a, b)[1] ≈ W0 atol = 1e-14
+        @test KD.weber(p, a, b)[2] ≈ W1 atol = 1e-13
+    end
+    # v∥ moments: the |ζ| ≥ 6 asymptotic series is summed to machine precision
+    for ζ in (6.0 + 0.1im, 8.0 + 1.0im, 20.0 + 0.0im)
+        q = 0.3
+        @test KD.linear_moments(ζ * sqrt(2.0) * q, q)[1] ≈ -plasma_Z(ζ) / (sqrt(2.0) * q) rtol = 1e-13
+    end
+    # quad = :analytic is the μ quadrature converged: nonuniform n, T, κT ≠ 0, all three bases
+    T(x) = 1 + 0.4 * sin(2π * x / 10)
+    n(x) = 1 + 0.2 * cos(2π * x / 10)
+    for (bc, pmax) in ((:periodic, 3), (:dirichlet, 0), (:mirror, 0))
+        m = RadialModel(; ky = 1.3, kpar = x -> 0.1, Ti = T, n, κT = log_gradient(T), κn = log_gradient(n), pmax)
+        Aa = operator(radial_grid(0, 10.0, 24; bc, quad = :analytic), m, 1.05 + 0.02im)
+        Aq = operator(radial_grid(0, 10.0, 24; bc, quad = :legendre, nmu = 256), m, 1.05 + 0.02im)
+        @test norm(Aa - Aq) < 1e-11 * norm(Aq)
+    end
+    # uniform profiles: singular at the local full-orbit root
+    m = RadialModel(; ky = 5.0, kpar = x -> 0.025, κT = x -> 0.34, κn = x -> 0.23, pmax = 8)
+    loc = first(filter(z -> abs(real(z) - 1) < 0.4, find_modes(local_model(m, 0.0)...; re = 0.7:0.1:1.3, imag = (0.002, 0.01), imin = 0.0)))
+    @test abs(first(KD.smallest(operator(radial_grid(-20, 20, 24; bc = :periodic, quad = :analytic), m, loc)))) < 1e-9
+    @test_throws ArgumentError KD.RadialWorkspace(radial_grid(-20, 20, 24; quad = :analytic), RadialModel(; ky = 0.5, drift = x -> 0.02))
+    # adiabatic = :exact: particle density of an exponential gyrocentre profile; uniform profiles unchanged
+    @test KD.gc_average(x -> exp(0.5x), x -> 1.0, 0.3) ≈ exp(0.15 + 0.125) rtol = 1e-12
+    g = radial_grid(-20, 20, 24; bc = :periodic, quad = :analytic)
+    mu = RadialModel(; ky = 2.0, Ti = x -> 1.3, Te = x -> 0.7, n = x -> 0.8, adiabatic = :local)
+    @test KD.adiabatic_diagonal(g, RadialModel(; ky = 2.0, Ti = x -> 1.3, Te = x -> 0.7, n = x -> 0.8, adiabatic = :exact)) ≈
+          KD.adiabatic_diagonal(g, mu) rtol = 1e-12
+
+    # exponential density, uniform T: exact local dispersion relation (all orders in κn)
+    ω, ky, kz = 0.9 + 0.2im, 2.0, 0.1
+    for (T, Te) in ((1.0, 1.0), (1.7, 0.8))     # κn → 0: the full-orbit local D
+        lm, _ = local_model(RadialModel(; ky, kpar = x -> kz, Ti = x -> T, Te = x -> Te, pmax = 60), 0.0)
+        @test exponential_dispersion(ω, 0.3, ky, kz; κn = 1e-12, T, Te) ≈ dispersion(lm, ω, Wavevector(; kx = 0.3, ky, kz)) rtol = 1e-10
+    end
+    # vs the time integral of the impulse response (exponent -2Q sin²(t/2) - iR sin t - kz² t²/2, R = -κn ky)
+    κ, kxp = 0.5, 0.3
+    Q, R = kxp^2 + ky^2 + κ^2 / 4, -κ * ky
+    G = exp(κ^2 / 2) * quadgk(t -> exp(-2Q * sin(t / 2)^2 - im * R * sin(t) - kz^2 * t^2 / 2 - im * ω * t), -400, 0; rtol = 1e-13)[1]
+    @test exponential_dispersion(ω, kxp, ky, kz; κn = κ) ≈ 1 + exp(-κ^2 / 2) * (exp(κ^2 / 2) + im * (ω + R) * G) rtol = 1e-12
+    # O(κn): the Boussinesq D misses -κn i ω ky [G(ω-1) - G(ω+1)]/2 (orbit phase across the gradient), not a k_x shift
+    G0(w) = quadgk(t -> exp(-2(kxp^2 + ky^2) * sin(t / 2)^2 - kz^2 * t^2 / 2 - im * w * t), -400, 0; rtol = 1e-13)[1]
+    κ = 1e-4
+    lm, _ = local_model(RadialModel(; ky, kpar = x -> kz, κn = x -> κ, pmax = 60), 0.0)
+    d = dispersion(lm, ω, Wavevector(; kx = kxp, ky, kz)) - exponential_dispersion(ω, kxp, ky, kz; κn = κ)
+    @test d ≈ -κ * im * ω * ky / 2 * (G0(ω - 1) - G0(ω + 1)) rtol = 1e-3
+    # the radial operator (36) reproduces it: its symbol on e^{i k_x x}, k_x = kx′ + iκ/2, n = e^{κx}, adiabatic = :exact
+    κ = 0.5
+    m = RadialModel(; ky, kpar = x -> kz, n = x -> exp(κ * x), κn = x -> κ, pmax = 40, adiabatic = :exact)
+    kx = kxp + im * κ / 2
+    q = kx - im * κ                                   # output wavenumber: n(x) e^{i k_x x}
+    kp(k) = sqrt(k^2 + ky^2)
+    eθ(k) = (ky + im * k) / kp(k)                     # e^{iθ_k}, θ_k = atan2(k_x, k_y), continued to complex k_x
+    σ = sum(KD.vpar_response(m, 0.0, ω, 0.0, p) * KD.weber(p, kp(q), kp(kx))[1] * (eθ(q) / eθ(kx))^p for p in -40:40)
+    np = KD.gc_average(m.n, m.Ti, 0.0)
+    @test (np + KD.gc_average(x -> m.n(x) / m.Ti(x), m.Ti, 0.0) - σ) / np ≈ exponential_dispersion(ω, kxp, ky, kz; κn = κ) rtol = 1e-12
+    # local_model with :exact: electrons carry the ion particle density
+    @test local_model(m, 0.3)[1].species[2].N ≈ exp(κ * 0.3 + κ^2 / 2) rtol = 1e-12
+    @test local_model(RadialModel(; ky, n = x -> exp(κ * x), adiabatic = :local), 0.3)[1].species[2].N ≈ exp(κ * 0.3)
+end

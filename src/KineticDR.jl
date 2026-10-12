@@ -32,6 +32,6 @@ export muller, find_root, find_modes, track_branch, count_roots, gradient_coeffi
        neutral_gradients, harmonic_root, critical_kappaT
 
 export RadialModel, RadialGrid, radial_grid, sheared_slab, log_gradient, local_model, local_roots,
-       operator, eigenmode, find_eigenmodes, find_eigenmode, count_eigenvalues, radial_field
+       operator, eigenmode, exponential_dispersion, find_eigenmodes, find_eigenmode, count_eigenvalues, radial_field
 
 end

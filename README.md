@@ -81,8 +81,17 @@ count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006)         # argument principle 
   with one value per grid node.
 - `find_eigenmodes` is a seed search and can miss nearly degenerate modes; `count_eigenvalues` counts them
   (L_s = 200 slab: 5 eigenvalues in a rectangle where the search finds 3).
-- Not exact: the radial operator drops cyclotron harmonics (≲ 1e-3 in γ in local tests); `operator` reuses a
-  workspace, so it is not thread-safe.
+- Larmor harmonics (full-orbit ions): `RadialModel(; pmax = Q)` keeps |p| ≤ Q, needs `bc = :periodic` (plane-wave
+  basis) and `drift = 0`. Converge Q: at k_y = 5 the IBW growth rates need Q ≈ 24 (γ changes by up to 46% from Q = 8).
+- μ integral: `radial_grid(...; quad = :analytic)` does it in closed form (Weber's second integral; exact, no `nmu`,
+  ~8× faster per ω than 96 Legendre nodes at N = 128, Q = 8; memory 2(Q+1)N³ Float64, 300 MB there). Needs `drift = 0`;
+  with drift use `quad = :legendre` (v⊥ nodes, for oscillatory J_p²) or `:laguerre` and converge `nmu`.
+- `RadialModel(; adiabatic = :exact)` (default): adiabatic ion term and Boltzmann-electron density at the particle position
+  (velocity integral of the guiding-centre Maxwellian; bsl6d's convention) instead of n(x)/T(x) and n(x) (`:local`).
+  `local_model` then uses the ion particle density for the electrons.
+- `exponential_dispersion(ω, kx′, ky, kz; κn, T, Te)`: exact local D for an exponential density (any κn) at uniform T,
+  all harmonics; modes are e^{κn x/2 + i kx′ x}. It differs from the Boussinesq D already at O(κn) for p ≠ 0.
+- `operator` reuses a workspace, so it is not thread-safe.
 
 Solvers: `muller`, `find_root` (model or any analytic function), `find_modes`, `harmonic_root`,
 `track_branch`, `count_roots` (argument principle).
@@ -103,9 +112,10 @@ src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral; non
 src/species.jl     Species, Model, charge_response, with_gradients
 src/fields.jl      Quasineutrality, Poisson, dispersion
 src/drift.jl       quadratic_average (v∥ average with drift), GyrokineticDrift
-src/radial.jl      RadialModel, RadialGrid, operator, eigenmode, find_eigenmodes, count_eigenvalues
+src/radial.jl      RadialModel, RadialGrid, operator, eigenmode, find_eigenmodes, count_eigenvalues, exponential_dispersion
 src/solve.jl       root finders and gradient scans
 test/runtests.jl   tests
 ```
 
-Not implemented: drift in the full-orbit (`GordeyevSeries`) response, kinetic electrons in the radial problem, complex k_x.
+Not implemented: drift in the full-orbit (`GordeyevSeries`) response, kinetic electrons in the radial problem, complex k_x
+(except in `exponential_dispersion`).
