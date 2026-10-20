@@ -115,18 +115,21 @@ end
     Cold()
 
 Cold fluid response (Stix S, D, P): M = [S' -iD' 0; iD' S' 0; 0 0 -1] with S' = -ω²/(ω²-1),
-D' = ω/(ω²-1). Electromagnetic only.
+D' = ω/(ω²-1). Electrostatic (`charge_response`), with E×B advection of the density gradient:
+q δn/φ = -w (N m k⊥² + q N κn k_y/ω) + (q² N/m) k_z²/ω², w = Ω²/(Ω² - ω²) (temperature unused).
 """
 struct Cold <: AbstractResponse end
 
 """
     DriftKinetic(; polarization = false)
 
-m → 0 limit of the hot tensor at fixed ζ = ω/(√2 |k∥| v_t) (electrons): E×B Hall current, parallel
-Landau response -ζ² Z'(ζ), and the n = 0 coupling to δB∥ (μ∇∥B force and perpendicular pressure):
-M_yy = 2b ζ Z(ζ), M_yz = -M_zy = -i √(b/2) ζ Z'(ζ), b = (k⊥ρ_t)², which stay finite in χ as m → 0.
+Drift-kinetic species, no finite Larmor radius. Electromagnetic: the m → 0 limit of the hot tensor at
+fixed ζ = ω/(√2 |k∥| v_t) (electrons): E×B Hall current, parallel Landau response -ζ² Z'(ζ), and the
+n = 0 coupling to δB∥ (μ∇∥B force and perpendicular pressure): M_yy = 2b ζ Z(ζ),
+M_yz = -M_zy = -i √(b/2) ζ Z'(ζ), b = (k⊥ρ_t)², which stay finite in χ as m → 0.
+Electrostatic: the p = 0 term at k⊥ρ = 0 (Γ₀ = 1, any gradients).
 `polarization = true` adds the polarisation drift (M_xx = M_yy += ω², i.e. χ_xx = N m/q² in units
-of ω_pi²/Ω_i²). Electromagnetic only.
+of ω_pi²/Ω_i²; electrostatic, the charge response -N m k⊥²).
 """
 Base.@kwdef struct DriftKinetic <: AbstractResponse
     polarization::Bool = false
@@ -134,8 +137,8 @@ end
 
 susceptibility(r::AbstractResponse, ω, k::Wavevector) =
     throw(ArgumentError("$(nameof(typeof(r))) has no electromagnetic susceptibility"))
-gordeyev(r::Union{Cold,DriftKinetic}, ω, k::Wavevector) =
-    throw(ArgumentError("$(nameof(typeof(r))) is electromagnetic only (no electrostatic response)"))
+gordeyev(::Cold, ω, k::Wavevector) = throw(ArgumentError("Cold has no Gordeyev sum (its charge response is the fluid one)"))
+gordeyev(::DriftKinetic, ω, k::Wavevector) = _series(ω, Wavevector(0.0, 0.0, k.kz), 0:0)   # Γ₀(0) = 1
 
 function susceptibility(::Cold, ω, k::Wavevector)
     d = ω^2 - 1

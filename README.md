@@ -54,11 +54,11 @@ Which response works with which model:
 | Response | Physics | Local electrostatic | Local EM | Radial |
 |---|---|:-:|:-:|:-:|
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
-| `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | |
+| `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | (not planned) |
 | `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG) | ✓ | | ✓ |
 | `Boltzmann()` | adiabatic, δn = −qNφ/T | ✓ | | ✓ |
-| `Cold()` | cold fluid (Stix S, D, P) | | ✓ | |
-| `DriftKinetic(; polarization = false)` | m → 0 limit of the hot tensor (electrons) | | ✓ | |
+| `Cold()` | cold fluid (Stix S, D, P; electrostatic with E×B gradient drive) | ✓ | ✓ | ✓ |
+| `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
 
 Field equations: `Quasineutrality()` and `Poisson(lambda2 = (λ_D/ρ_i)²)` are electrostatic, local and
 radial. `Darwin(beta)` and `Maxwell(beta, lambda2)` are electromagnetic and local only. A combination
@@ -124,7 +124,7 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
 
 ## Radial eigenmodes
 
-Gyrokinetic or full-orbit species with radial profiles in a shearless slab (B = 1, k∥ = k_z everywhere). Use the same
+Gyrokinetic, full-orbit, drift-kinetic or cold species with radial profiles in a shearless slab (B = 1, k∥ = k_z everywhere). Use the same
 `Model`, but give a species as a function x → `Species`. The radial grid turns the problem into an
 operator A(ω) acting on φ(x), and an eigenmode is an ω at which A(ω) is singular.
 
@@ -172,13 +172,19 @@ r = find_eigenmode(g, m, k; re = 1.0:0.02:1.1, imag = 0.001:0.002:0.011, starts 
   ω by 5e-14, `pmax` = 16 → 24 by 1.4e-5). The workspace holds 2N²(`pmax` + 1)·n_ρ floats per kinetic species,
   n_ρ the number of distinct gyroradii on the grid: 1 for uniform T, N otherwise (840 MB at N = 128, `pmax` = 24);
   above 4 GB it warns.
-- **Full orbit.** `GordeyevSeries` needs a fixed `pmax ≥ 0` and `bc = :periodic` with periodic profiles (checked at
+- **Full orbit.** `GordeyevSeries` needs a fixed `pmax ≥ 0`: the adaptive cut-off of the local model, taken at the
+  grid's highest wavenumber, needs far more harmonics than the mode (P = 132 at N = 64, 252 at N = 128 in the IBW
+  example, which changes by 1.4e-5 from P = 16 to 24). It also needs `bc = :periodic` with periodic profiles (checked at
   the walls): harmonic p carries the orbit phase e^{−i sgn(q) pθ_k}, θ_k = atan2(k_x, k_y), which leaves a
   standing-wave basis. With guiding-centre profiles the operator is exact up to the cut-off: its symbol for an
   exponential density is `exponential_dispersion(ω, kx′, ky, kz; κn, T, Te)`, the exact local dispersion relation
   of that profile (ions). Negative charges rest on the mirror symmetry y → −y (charge −q at k_y = charge q at
   −k_y), which the tests check, plus the uniform-profile limit; there is no exact non-uniform electron reference.
   `Gyrokinetic` and `GordeyevSeries(pmax = 0)` are the same kernel.
+- **No Larmor radius.** `DriftKinetic` and `Cold` species are local in x except for the polarisation current
+  −∂x(N m ∂x φ), weighted by 1 (`DriftKinetic(polarization = true)`, else 0) or Ω²/(Ω² − ω²) (`Cold`). The cold
+  fluid is exact: it equals the full-orbit operator as T → 0, gradient drive included. Locally that drive is
+  w q N κn k_y/ω, while the local kinetic responses keep only its E×B part (w = 1), a difference of O(κn ω²/Ω²).
 - **Walls.** `:dirichlet` puts φ = 0 on both walls (the kinetic wall of the bslLD runs); `:mirror` makes
   φ even about both walls. A mode localised away from the walls must give the same ω with both.
 - **Finding modes.**

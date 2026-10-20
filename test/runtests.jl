@@ -342,7 +342,7 @@ end
     @test dkerr(1e-6) < 0.1 * dkerr(1e-4)
 
     # (12) guards
-    @test_throws ArgumentError dispersion(Model((Species(response = Cold()), Species(q = -1, response = Boltzmann())), Quasineutrality()), ω, k)
+    @test_throws ArgumentError nonadiabatic_response(Species(response = Cold()), ω, k)          # fluid: no Gordeyev sum
     @test_throws ArgumentError dispersion(Model((Species(), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), ω, k)
     @test_throws ArgumentError dispersion(Model((Species(κn = 0.1), Species(q = -1, m = μ)), Darwin(beta = β)), ω, k)
 end
@@ -609,4 +609,55 @@ end
                    Wavevector(ky = 0.5, kz = 0.01), 0.02 + 0.01im) rtol = 1e-14
     # uniform T: one table per harmonic, shared by all nodes
     @test size(KD.WeberOperator(g, Wavevector(ky = 1.0), [Species() for _ in g.x], 2).W0[1], 1) == 1
+end
+
+@testset "radial: species without Larmor radius (DriftKinetic, Cold)" begin
+    # local electrostatic responses: -k·χ·k of the electromagnetic tensor at zero gradient
+    for k in (Wavevector(0.4, 0.7, 0.1), Wavevector(0.0, 1.1, 0.3)), r in (Cold(), DriftKinetic(), DriftKinetic(polarization = true))
+        s, ω, kv = Species(q = -1, m = 0.3, T = 0.7, N = 0.8, response = r), 0.3 + 0.02im, [k.kx, k.ky, k.kz]
+        @test charge_response(s, ω, k) ≈ -transpose(kv) * KD.susceptibility(s, ω, k) * kv rtol = 1e-13
+    end
+    # drift kinetic = gyrokinetic at k⊥ → 0 with the same ω_*
+    ky, ω = 0.8, 0.05 + 0.01im
+    dk = Species(q = -1, m = 0.01, T = 0.5, κn = 0.2, κT = -0.4, response = DriftKinetic())
+    gk = Species(q = -1, m = 0.01, T = 0.5, κn = 0.2ky / 1e-9, κT = -0.4ky / 1e-9, response = Gyrokinetic())
+    @test charge_response(dk, ω, Wavevector(; ky, kz = 0.2)) ≈ charge_response(gk, ω, Wavevector(ky = 1e-9, kz = 0.2)) rtol = 1e-13
+    # cold = full-orbit kinetic as T → 0 (zero gradient; with a gradient see the radial check below)
+    for ω in (0.3 + 0.02im, 1.7 + 0.05im), q in (1, -1)
+        k = Wavevector(0.4, 0.7, 0.1)
+        @test charge_response(Species(; q, response = Cold()), ω, k) ≈
+              charge_response(Species(; q, T = 1e-8, response = GordeyevSeries()), ω, k) rtol = 1e-6
+    end
+    # radial, uniform profiles: diagonal on the basis, entries the local D at k_x = k_m, every bc
+    ω, k = 0.3 + 0.02im, Wavevector(ky = 0.7, kz = 0.1)
+    for bc in (:periodic, :mirror, :dirichlet), r in (Cold(), DriftKinetic(polarization = true))
+        g = radial_grid(-5, 5, 16; bc)
+        m = Model((Species(T = 0.7, response = r), adiabatic_electrons()), Quasineutrality())
+        B = g.Cinv * operator(g, m, k, ω) * g.C
+        @test maximum(abs, B - Diagonal(diag(B))) < 1e-12
+        @test diag(B) ≈ [dispersion(m, ω, Wavevector(q, k.ky, k.kz)) for q in g.k] rtol = 1e-13
+    end
+    # radial cold = radial full-orbit kinetic (exact for guiding-centre profiles) as T → 0, with a gradient: checks
+    # the polarisation operator -∂x N m ∂x and the gradient drive w q N κn k_y/ω (resolved modes; at the grid's highest
+    # wavenumbers the kinetic orbit phase is aliased)
+    L = 4π
+    n(x) = exp(0.3sin(2π * x / L))
+    g = radial_grid(0, L, 32; bc = :periodic)
+    lo = findall(q -> abs(q) < 3, g.k)
+    for ω in (0.3 + 0.02im, 1.7 + 0.05im), q in (1, -1)
+        Bc = g.Cinv * operator(g, Model((species_profile(; N = n, q, response = Cold()),), Quasineutrality()), k, ω) * g.C
+        Bk = g.Cinv * operator(g, Model((species_profile(; N = n, q, T = x -> 1e-6, response = GordeyevSeries(pmax = 1)),),
+                                        Quasineutrality()), k, ω) * g.C
+        @test maximum(abs, Bc[lo, lo] - Bk[lo, lo]) < 1e-5 * maximum(abs, Bc[lo, lo])
+    end
+    # end to end: drift-kinetic ions with polarisation, uniform, return the local root
+    m = Model((Species(κn = -0.3, response = DriftKinetic(polarization = true)), adiabatic_electrons()), Quasineutrality())
+    ku = Wavevector(ky = 0.5, kz = 0.05)
+    loc, ok = find_root(m, ku, 0.1 + 0.01im)
+    r = eigenmode(radial_grid(-10, 10, 16; bc = :periodic), m, ku, loc * (1 + 1e-3))
+    @test ok && r.converged
+    @test r.ω ≈ loc rtol = 1e-8
+    # one response at every x
+    mix = x -> Species(response = x < 2 ? Cold() : DriftKinetic())
+    @test_throws ArgumentError operator(g, Model((mix,), Quasineutrality()), k, ω)
 end
