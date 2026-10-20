@@ -6,7 +6,7 @@ Kinetic dispersion relations of a magnetised plasma. You describe the plasma as 
 - **local electrostatic**: full-orbit (all cyclotron harmonics), gyrokinetic or Boltzmann species with
   density and temperature gradients, closed by quasineutrality or Poisson;
 - **local electromagnetic**: hot, cold and drift-kinetic species, closed by Darwin or full Maxwell;
-- **radial**: gyrokinetic species with radial profiles n(x), T(x); the eigenvalue problem for φ(x).
+- **radial**: gyrokinetic or full-orbit species with radial profiles n(x), T(x); the eigenvalue problem for φ(x).
 
 Validation studies (Raeth & Hallatschek, PRL **133**, 195101 (2024); Maeyama, Phys. Plasmas **33**,
 082505 (2026); bsl6d) live in the separate repository `ibw_dispersion`.
@@ -53,7 +53,7 @@ Which response works with which model:
 
 | Response | Physics | Local electrostatic | Local EM | Radial |
 |---|---|:-:|:-:|:-:|
-| `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | |
+| `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | |
 | `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG) | ✓ | | ✓ |
 | `Boltzmann()` | adiabatic, δn = −qNφ/T | ✓ | | ✓ |
@@ -124,7 +124,7 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
 
 ## Radial eigenmodes
 
-Gyrokinetic species with radial profiles in a shearless slab (B = 1, k∥ = k_z everywhere). Use the same
+Gyrokinetic or full-orbit species with radial profiles in a shearless slab (B = 1, k∥ = k_z everywhere). Use the same
 `Model`, but give a species as a function x → `Species`. The radial grid turns the problem into an
 operator A(ω) acting on φ(x), and an eigenmode is an ω at which A(ω) is singular.
 
@@ -145,6 +145,19 @@ count_eigenvalues(g, m, k, -0.06, 0.0, 0.001, 0.015)   # how many eigenvalues th
 dispersion(m(0.0), r.ω, k)                             # m(x) is the local model at x
 ```
 
+Full-orbit species (ion Bernstein waves) keep the Larmor harmonics |p| ≤ `pmax` and need the periodic basis:
+
+```julia
+ion = species_profile(; N = x -> exp(0.46sin(x / 2)), T = x -> exp(0.68sin(x / 2)),    # κn = 0.23cos(x/2), κT = 0.34cos(x/2)
+                      response = GordeyevSeries(pmax = 16))   # harmonics |p| ≤ 16
+ele = species_profile(; q = -1, N = particle_density(ion), response = Boltzmann())
+m = Model((ion, ele), Quasineutrality())
+k = Wavevector(ky = 5.0, kz = 0.025)
+g = radial_grid(-2π, 2π, 64; bc = :periodic)                   # periodic profiles; plane-wave basis
+seeds = local_roots(m, k, -2:1:2; re = 0.8:0.1:1.2, imag = (0.002, 0.01))
+r = find_eigenmode(g, m, k; re = 1.0:0.02:1.1, imag = 0.001:0.002:0.011, starts = seeds)   # ω = 1.04348 + 0.00733i
+```
+
 - **Profiles.** `species_profile(; N, T, q, m, response = Gyrokinetic())` derives κn, κT from N(x), T(x).
   A hand-written `x -> Species(...)` (any callable) uses its κn, κT exactly as given. A plain `Species`
   is uniform.
@@ -154,8 +167,14 @@ dispersion(m(0.0), r.ω, k)                             # m(x) is the local mode
   - `particle_density(ion)` is the ion particle density; pass it as the Boltzmann electrons' `N` for
     bsl6d's quasineutral equilibrium.
   - A `Boltzmann` species' N is taken at the node.
-- **Exact integrals.** The v∥ and μ integrals are exact (Z functions and Weber's integral); only x is
-  discretised. Converge in N. The workspace holds 2N³ floats per kinetic species (270 MB at N = 256).
+- **Exact integrals.** The v∥ and μ integrals are exact (Z functions and Weber's integral); only x and, for
+  full-orbit species, the harmonics are truncated. Converge in N and `pmax` (the IBW example: N = 64 → 96 changes
+  ω by 1e-14, `pmax` = 16 → 24 by 1.4e-5). The workspace holds 2N³(`pmax` + 1) floats per kinetic species
+  (270 MB at N = 256, `pmax` = 0; 840 MB at N = 128, `pmax` = 24).
+- **Full orbit.** `GordeyevSeries` needs a fixed `pmax` and `bc = :periodic`: harmonic p carries the orbit phase
+  e^{−ipθ_k}, θ_k = atan2(k_x, k_y), which leaves a standing-wave basis. With guiding-centre profiles the operator
+  is exact up to the cut-off: its symbol for an exponential density is `exponential_dispersion(ω, kx′, ky, kz; κn)`,
+  the exact local dispersion relation of that profile.
 - **Walls.** `:dirichlet` puts φ = 0 on both walls (the kinetic wall of the bslLD runs); `:mirror` makes
   φ even about both walls. A mode localised away from the walls must give the same ω with both.
 - **Finding modes.**
@@ -201,7 +220,7 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
 - Magnetic drift and toroidal terms. `GyrokineticDrift`, magnetic shear and B(x) in the radial problem
   are on the branch `radial-geometry`.
 - Gradients in the electromagnetic tensor.
-- Full-orbit species and electromagnetic fields in the radial problem.
+- Electromagnetic fields in the radial problem.
 - Complex k.
 
 ## Layout

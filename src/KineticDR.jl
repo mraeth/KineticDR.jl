@@ -35,7 +35,7 @@ export plasma_Z, Gamma_p, dGamma_p
 export muller, find_root, find_modes, track_branch, count_roots, gradient_coefficients,
        neutral_gradients, harmonic_root, critical_kappaT
 
-export RadialGrid, radial_grid, log_gradient, species_profile, particle_density, local_roots,
+export RadialGrid, radial_grid, log_gradient, species_profile, particle_density, exponential_dispersion, local_roots,
        operator, eigenmode, find_eigenmodes, find_eigenmode, count_eigenvalues, radial_field
 
 end

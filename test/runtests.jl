@@ -12,6 +12,28 @@ struct ConstProfile                                    # a profile that is a cal
     s::Species
 end
 (p::ConstProfile)(x) = p.s
+
+# The radial operator with the μ integral by 128-node Gauss–Laguerre quadrature, built independently of the package:
+# gyroaverage J_p with the orbit phase, adjoint J', Poisson term
+function quadrature_operator(g, m, k, ω; n = 128)
+    E = eigen(SymTridiagonal([2j + 1.0 for j in 0:(n - 1)], [Float64(j) for j in 1:(n - 1)]))
+    A = Matrix{ComplexF64}(Diagonal([sum(KD.adiabatic_term(sp, x) for sp in m.species) for x in g.x]))
+    m.field isa Poisson && (A += m.field.lambda2 * g.C * Diagonal(g.k .^ 2 .+ k.ky^2 .+ k.kz^2) * g.Cinv)
+    for sp in m.species
+        ss = [KD.species_at(sp, x) for x in g.x]
+        ss[1].response isa Boltzmann && continue
+        P = ss[1].response isa Gyrokinetic ? 0 : ss[1].response.pmax
+        σ = sign(ss[1].q)
+        for p in -P:P, (μ, w) in zip(E.values, E.vectors[1, :] .^ 2)
+            # harmonic p of e^{ik·ρ}: J_p(k⊥ρ) e^{-iσpθ_k}, θ_k = atan2(k_x, k_y)
+            G = [g.C[j, l] * cis(-σ * p * atan(g.k[l], k.ky)) * besselj(p, hypot(g.k[l], k.ky) * sqrt(2μ * s.T * s.m) / abs(s.q))
+                 for (j, s) in enumerate(ss), l in eachindex(g.k)]
+            J = G * g.Cinv
+            A -= J' * Diagonal([w * s.q^2 * s.N / s.T * KD.vpar_response(k, s, ω, μ, p) for s in ss]) * J
+        end
+    end
+    return A
+end
 paper_model(; κn = 0.23, κT = 0.34, ion = GordeyevSeries(), τ = 1.0, field = Quasineutrality()) =
     Model((Species(; κn, κT, response = ion), adiabatic_electrons(τ)), field)
 ion_W(m, ω, k) = nonadiabatic_response(m.species[1], ω, k)
@@ -406,7 +428,7 @@ end
     @test (m3(1.3).species[1].T, m3(1.3).species[1].κT) == (T(1.3), sp(1.3).κT)
     @test dispersion(m3(1.3), 0.01 + 0.01im, k) isa Complex
     @test_throws ArgumentError dispersion(m3, 0.01 + 0.01im, k)
-    # not (yet) radial: electromagnetic fields, full-orbit responses, k_x ≠ 0, non-finite guess
+    # not (yet) radial: electromagnetic fields, full orbit without a fixed cut-off, k_x ≠ 0, non-finite guess
     @test_throws ArgumentError operator(g2, Model((ion, el), Darwin(beta = 0.1)), k, 0.1 + 0.01im)
     @test_throws ArgumentError operator(g2, Model((Species(), el), Quasineutrality()), k, 0.1 + 0.01im)
     @test_throws ArgumentError operator(g2, m3, Wavevector(kx = 0.1, ky = 0.5), 0.1 + 0.01im)
@@ -443,24 +465,8 @@ end
         @test KD.vpar_response(kv, s, ω, μ) ≈ direct rtol = 1e-10
         @test KD.vpar_response(Wavevector(ky = 0.7), s, ω, μ) ≈ (ω - ωs(1.0)) / ω rtol = 1e-14
     end
-    # the operator is the μ integral done by quadrature (128 Gauss–Laguerre nodes), built independently:
-    # gyroaverage J, adjoint J', Poisson term. Nonuniform N, T, κ ≠ 0; ions with q = 2, m = 4 and kinetic
-    # electrons; both bases (small N: the quadrature resolves every k_x)
-    function quadrature_operator(g, m, k, ω; n = 128)
-        E = eigen(SymTridiagonal([2j + 1.0 for j in 0:(n - 1)], [Float64(j) for j in 1:(n - 1)]))
-        A = Matrix{ComplexF64}(Diagonal([sum(KD.adiabatic_term(sp, x) for sp in m.species) for x in g.x]))
-        m.field isa Poisson && (A += m.field.lambda2 * g.C * Diagonal(g.k .^ 2 .+ k.ky^2 .+ k.kz^2) * g.Cinv)
-        for sp in m.species
-            ss = [sp(x) for x in g.x]
-            ss[1].response isa Gyrokinetic || continue
-            for (μ, w) in zip(E.values, E.vectors[1, :] .^ 2)
-                G = [g.C[j, l] * besselj(0, hypot(g.k[l], k.ky) * sqrt(2μ * s.T * s.m) / abs(s.q)) for (j, s) in enumerate(ss), l in eachindex(g.k)]
-                J = G * g.Cinv
-                A -= J' * Diagonal([w * s.q^2 * s.N / s.T * KD.vpar_response(k, s, ω, μ) for s in ss]) * J
-            end
-        end
-        return A
-    end
+    # the operator is the μ integral done by quadrature (`quadrature_operator`, built independently). Nonuniform
+    # N, T, κ ≠ 0; ions with q = 2, m = 4 and kinetic electrons; both bases (small N: the quadrature resolves every k_x)
     N, T = x -> 1 + 0.3tanh(x / 3), x -> exp(-0.8tanh(x / 2))
     k = Wavevector(ky = 0.7, kz = 0.02)
     ion2 = species_profile(; q = 2, m = 4, N = x -> N(x) / 2, T = x -> 1.5T(x))
@@ -497,4 +503,74 @@ end
     @test KD.adiabatic_term(ion, 0.3) ≈ exp(0.15 + 0.125) rtol = 1e-12
     @test KD.adiabatic_term(species_profile(; q = -1, N = x -> exp(0.5x), response = Boltzmann()), 0.3) == exp(0.15)
     @test KD.adiabatic_term(Species(N = 0.8, T = 1.3), 0.3) == 0.8 / 1.3
+end
+
+@testset "radial: Larmor harmonics (full orbit)" begin
+    # uniform profiles, periodic basis: A is diagonal and entry l is the local full-orbit D at k_x = k_l (k_x of
+    # both signs), for full-orbit ions with Boltzmann or full-orbit electrons
+    for sp in ((Species(κn = 0.23, κT = 0.34, response = GordeyevSeries(pmax = 12)), Species(q = -1, response = Boltzmann())),
+               (Species(κn = 0.23, κT = 0.34, response = GordeyevSeries(pmax = 12)),
+                Species(q = -1, m = 0.05, T = 0.8, κT = 0.2, response = GordeyevSeries(pmax = 6))))
+        m, k, ω = Model(sp, Quasineutrality()), Wavevector(ky = 2.0, kz = 0.05), 1.05 + 0.01im
+        g = radial_grid(-10, 10, 24; bc = :periodic)
+        Ad = g.Cinv * operator(g, m, k, ω) * g.C
+        local_D = [dispersion(m, ω, Wavevector(kx = q, ky = k.ky, kz = k.kz)) for q in g.k]
+        @test maximum(abs.(Ad - Diagonal(Ad))) < 1e-13 * maximum(abs.(Ad))
+        @test maximum(abs.(diag(Ad) - local_D)) < 1e-13 * maximum(abs.(local_D))
+    end
+    # and singular at the local IBW root (p = 1)
+    mu = Model((Species(κn = 0.23, κT = 0.34, response = GordeyevSeries(pmax = 8)), adiabatic_electrons()), Quasineutrality())
+    ku = Wavevector(ky = 5.0, kz = 0.025)
+    loc = first(filter(z -> abs(real(z) - 1) < 0.4, find_modes(mu, ku; re = 0.7:0.1:1.3, imag = (0.002, 0.01), imin = 0.0)))
+    @test abs(first(KD.smallest(operator(radial_grid(-20, 20, 24; bc = :periodic), mu, ku, loc)))) < 1e-9
+    # non-uniform periodic profiles: the closed-form μ integral is the μ quadrature (assembly with the orbit phase)
+    T(x) = 1 + 0.3 * sin(2π * x / 10)
+    n(x) = 1 + 0.2 * cos(2π * x / 10)
+    ion = species_profile(; N = n, T, response = GordeyevSeries(pmax = 3))
+    for el in (species_profile(; q = -1, N = particle_density(ion), response = Boltzmann()),
+               species_profile(; q = -1, m = 0.1, N = n, T = x -> 0.5T(x), response = GordeyevSeries(pmax = 2)))
+        m, k, g = Model((ion, el), Quasineutrality()), Wavevector(ky = 1.3, kz = 0.1), radial_grid(0, 10.0, 24; bc = :periodic)
+        A = operator(g, m, k, 1.05 + 0.02im)
+        @test maximum(abs.(A - quadrature_operator(g, m, k, 1.05 + 0.02im))) < 1e-12 * maximum(abs.(A))
+    end
+    # mirror y -> -y: a species of charge -q at k_y is the species of charge q at -k_y (ω_* = (T/q) k_y κ unchanged)
+    g = radial_grid(0, 10.0, 24; bc = :periodic)
+    sp(q) = species_profile(; q, N = n, T, response = GordeyevSeries(pmax = 3))
+    bz(q) = species_profile(; q, N = n, response = Boltzmann())
+    @test operator(g, Model((sp(-1), bz(1)), Quasineutrality()), Wavevector(ky = 1.3, kz = 0.1), 1.05 + 0.02im) ≈
+          operator(g, Model((sp(1), bz(-1)), Quasineutrality()), Wavevector(ky = -1.3, kz = 0.1), 1.05 + 0.02im) rtol = 1e-12
+    @test length(eigenmode(g, Model((ion, bz(-1)), Quasineutrality()), Wavevector(ky = 1.3, kz = 0.1), 1.05 + 0.02im).φ) == 24
+    # exponential density, uniform T: the exact local DR (all orders in κn) ...
+    ω, ky, kz = 0.9 + 0.2im, 2.0, 0.1
+    for (Ti, Te) in ((1.0, 1.0), (1.7, 0.8))             # ... is the full-orbit local D for κn → 0
+        lm = Model((Species(T = Ti, response = GordeyevSeries(pmax = 60)), Species(q = -1, T = Te, response = Boltzmann())), Quasineutrality())
+        @test exponential_dispersion(ω, 0.3, ky, kz; κn = 1e-12, T = Ti, Te) ≈ dispersion(lm, ω, Wavevector(; kx = 0.3, ky, kz)) rtol = 1e-10
+    end
+    # ... equals the time integral of the impulse response (exponent -2Q sin²(t/2) - iR sin t - kz² t²/2, R = -κn ky) ...
+    κ, kxp = 0.5, 0.3
+    Q, R = kxp^2 + ky^2 + κ^2 / 4, -κ * ky
+    G = exp(κ^2 / 2) * quadgk(t -> exp(-2Q * sin(t / 2)^2 - im * R * sin(t) - kz^2 * t^2 / 2 - im * ω * t), -400, 0; rtol = 1e-13)[1]
+    @test exponential_dispersion(ω, kxp, ky, kz; κn = κ) ≈ 1 + exp(-κ^2 / 2) * (exp(κ^2 / 2) + im * (ω + R) * G) rtol = 1e-12
+    # ... and differs from the Boussinesq D at O(κn) by the orbit phase across the gradient, not by a k_x shift
+    G0(w) = quadgk(t -> exp(-2(kxp^2 + ky^2) * sin(t / 2)^2 - kz^2 * t^2 / 2 - im * w * t), -400, 0; rtol = 1e-13)[1]
+    lm = Model((Species(κn = 1e-4, response = GordeyevSeries(pmax = 60)), adiabatic_electrons()), Quasineutrality())
+    d = dispersion(lm, ω, Wavevector(; kx = kxp, ky, kz)) - exponential_dispersion(ω, kxp, ky, kz; κn = 1e-4)
+    @test d ≈ -1e-4 * im * ω * ky / 2 * (G0(ω - 1) - G0(ω + 1)) rtol = 1e-3
+    # the radial operator's symbol on e^{i k_x x}, k_x = kx′ + iκ/2, for n = e^{κx} (guiding centre, exact adiabatic
+    # terms) is the exact DR; k_y of both signs
+    for ky in (2.0, -2.0)
+        ion = species_profile(; N = x -> exp(κ * x), response = GordeyevSeries(pmax = 40))
+        k, s0 = Wavevector(; ky, kz), ion(0.0)
+        kx = kxp + im * κ / 2
+        q = kx - im * κ                                  # output wavenumber: n(x) e^{i k_x x}
+        kp(k) = sqrt(k^2 + ky^2)
+        eθ(k) = (ky + im * k) / kp(k)                    # e^{iθ_k}, θ_k = atan2(k_x, k_y), continued to complex k_x
+        σ = sum(KD.vpar_response(k, s0, ω, 0.0, p) * KD.weber(p, kp(q), kp(kx))[1] * (eθ(q) / eθ(kx))^p for p in -40:40)
+        np = particle_density(ion)(0.0)
+        @test (np + KD.adiabatic_term(ion, 0.0) - σ) / np ≈ exponential_dispersion(ω, kxp, ky, kz; κn = κ) rtol = 1e-12
+    end
+    # interface
+    @test_throws ArgumentError operator(g, Model((Species(), adiabatic_electrons()), Quasineutrality()), Wavevector(ky = 1.0), 0.1 + 0.01im)
+    @test_throws ArgumentError operator(radial_grid(0, 10.0, 24), mu, ku, 1.0 + 0.01im)                 # p ≠ 0 needs :periodic
+    @test_throws ArgumentError radial_grid(0, 10.0, 25; bc = :periodic)
 end
