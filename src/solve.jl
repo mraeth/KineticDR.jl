@@ -33,17 +33,21 @@ end
 
 Muller iteration from `ω0` (seeds ω0, ω0+δ, ω0+iδ). `model` is anything with a `dispersion(model, ω, k)` method;
 `f` is any analytic function of ω (use it to solve in rescaled frequency units).
+A vanishing step is not enough: `converged` also needs the Newton step |f/f′| ≤ `ftol` max(|ω|, δ),
+which does not depend on the scale of f (electrostatic D is O(1), det(ω²𝒟) is not).
 """
 function find_root(f::Function, ω0; δ = 1e-3, ftol = 1e-8, kwargs...)
     ω0 = complex(ω0)
     ω, ok = muller(f, ω0, ω0 + δ, ω0 + im * δ; kwargs...)
-    # a vanishing step is not enough: D is O(1), require a small residual too
-    return ω, ok && isfinite(ω) && abs(f(ω)) < ftol
+    (ok && isfinite(ω)) || return ω, false
+    h = 1e-6 * max(abs(ω), δ)
+    f0 = f(ω)
+    return ω, abs(f0) * h <= ftol * max(abs(ω), δ) * abs(f(ω + h) - f0)
 end
 find_root(m, k::Wavevector, ω0; kwargs...) = find_root(ω -> dispersion(m, ω, k), ω0; kwargs...)
 
 """
-    find_modes(model, k; re, im, imin = -Inf, tol_res = 1e-8) -> Vector{ComplexF64}
+    find_modes(model, k; re, imag, imin = -Inf, tol_res = 1e-8) -> Vector{ComplexF64}
 
 All roots found from a grid of Muller seeds (`re` × `imag` ranges), de-duplicated and sorted by
 real part. Only a seed search: roots outside the seeded region are not found
@@ -84,6 +88,9 @@ function track_branch(D::Function, ks::AbstractVector, ω0; δ = 1e-4, kwargs...
 end
 track_branch(m, ks::AbstractVector{<:Wavevector}, ω0; kwargs...) =
     track_branch((ω, k) -> dispersion(m, ω, k), ks, ω0; kwargs...)
+# a function with Wavevector parameters is not a model (resolves the ambiguity with the method above)
+track_branch(D::Function, ks::AbstractVector{<:Wavevector}, ω0; kwargs...) =
+    invoke(track_branch, Tuple{Function,AbstractVector,Any}, D, ks, ω0; kwargs...)
 
 """
     count_roots(f, re0, re1, im0, im1; maxdarg = 0.1) -> Int

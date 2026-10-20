@@ -1,9 +1,10 @@
 # KineticDR.jl
 
-Local electrostatic dispersion relations of a magnetised plasma: any number of species (ions and
-electrons are the same type, each with its own charge, mass, temperature, density, gradients and
-kinetic response) closed by a field equation. Full-orbit (all cyclotron harmonics), gyrokinetic and
-Boltzmann responses; root finders and gradient scans on the complex-ω plane.
+Local dispersion relations of a magnetised plasma: any number of species (ions and electrons are
+the same type, each with its own charge, mass, temperature, density, gradients and kinetic response)
+closed by a field equation. Electrostatic (with density/temperature gradients) and electromagnetic
+(Darwin or full Maxwell, homogeneous background). Full-orbit (all cyclotron harmonics), gyrokinetic,
+drift-kinetic, cold and Boltzmann responses; root finders and gradient scans on the complex-ω plane.
 
 Units: m_i = e = B = T_i = N_i = 1 (Ω_i = 1, lengths in ρ_i, potentials in T_i/e), time dependence
 exp(−iωt), growth for Im ω > 0.
@@ -57,7 +58,46 @@ A new response is a subtype of `AbstractResponse` plus one `gordeyev` method.
 `critical_kappaT`, `with_gradients`) act on species 1 unless `species = i` is given.
 
 Solvers: `muller`, `find_root` (model or any analytic function), `find_modes`, `harmonic_root`,
-`track_branch`, `count_roots` (argument principle).
+`track_branch`, `count_roots` (argument principle). A root counts as converged when the Newton step
+|D/D′| is below `ftol` relative to |ω|, independent of the scale of D.
+
+## Electromagnetic
+
+```julia
+β, μ = 0.1, 1 / 100                                        # β = 2μ₀ N T_i / B², μ = m_e/m_i
+ion = Species()                                            # hot Maxwellian, GordeyevSeries()
+electron = Species(q = -1, m = μ, response = DriftKinetic())
+model = Model((ion, electron), Darwin(beta = β))           # or Maxwell(beta = β, lambda2 = (v_A/c)²)
+k = Wavevector(ky = 0.5, kz = 0.2)                         # any k⊥ = (kx, ky), b̂ = ẑ
+dispersion_matrix(model, 0.8 + 0.01im, k)                  # 𝒟 (3×3), 𝒟 Ê = 0
+find_root(model, k, 0.8 + 0.01im)                          # roots of det(ω² 𝒟)
+```
+
+𝒟 = vacuum + Σ_s χ̃_s − (2/β)(k²/ω²)(I − k̂k̂) in units of ω_pi²/Ω_i², with (c/ω_pi)² = (2/β)ρ_i²
+(`Darwin` is quasineutral Darwin: no vacuum term at all, the longitudinal part is quasineutrality;
+`Maxwell`: vacuum term `lambda2` = (v_A/c)² = (λ_D/ρ_i)², the longitudinal part is Poisson). The species
+tensor is χ̃_s = (q²N/m)/ω² · R M_s Rᵀ, with M_s from `susceptibility(response, ω, k)` in the species'
+own units in the frame where k⊥ lies along x, and R the rotation about b̂ back to (kx, ky):
+
+| Response | Tensor |
+|---|---|
+| `GordeyevSeries` | Stix hot-Maxwellian tensor, all harmonics |
+| `GordeyevIntegral` | the same as an orbit integral (validation; Im ω > 0 or k∥ ≠ 0) |
+| `Cold` | Stix S, D, P |
+| `DriftKinetic(; polarization = false)` | m → 0 at fixed ζ: Hall (E×B), parallel Landau −ζ²Z′(ζ), and the n = 0 δB∥ coupling (μ∇∥B, perpendicular pressure); `polarization = true` adds χ_xx = χ_yy += N m/q² |
+
+Electron sign (mirror y → −y) and the direction of k⊥ (rotation about b̂) are handled by the species
+method. `GordeyevSeries(pmax = 0)` keeps only n = 0 in the tensor: no perpendicular (cyclotron) response.
+`dispersion` returns det(ω²𝒟), kept analytic in ω (no ω-dependent scaling), so all ω-root finders
+apply; it is entire for k∥ ≠ 0 with kinetic species, `Cold` species keep their poles at ω = |Ω_s|.
+The tensor's longitudinal projection k·χ̃_s·k equals −`charge_response(s, ω, k)` of the electrostatic path.
+det(ω²𝒟) can vanish like ω² at ω = 0 (k∥ = 0, and with `DriftKinetic` electrons also for k∥ ≠ 0):
+seeds or branch tracking at low frequency can converge to this spurious root, so discard roots with ω ≈ 0.
+
+Limits: no gradients (a species with κ ≠ 0 throws), `Boltzmann`/`Gyrokinetic` have no tensor and
+`Cold`/`DriftKinetic` no electrostatic response (both throw `ArgumentError`). Solve for ω at real k; complex k is not supported. For a kinetic species with
+0 < k∥ ≪ ω (|ζ| ≫ 1), Z(ζ) ∝ e^{ζ²} below the real ω axis, so root searches there overflow: use
+k∥ = 0 exactly for perpendicular propagation.
 
 ## Sign convention
 
@@ -71,11 +111,13 @@ drive numerator ω − ω_* with ω_* = +k_y(κn + κT(v²−3)/2) for ions. Con
 src/KineticDR.jl   module, exports
 src/special.jl     plasma Z function, Γ_p = I_p e^{-x}
 src/types.jl       Wavevector, abstract types
-src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral; nonadiabatic_response kernel
-src/species.jl     Species, Model, charge_response, with_gradients
-src/fields.jl      Quasineutrality, Poisson, dispersion
+src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral, Cold, DriftKinetic;
+                   nonadiabatic_response kernel, susceptibility tensors
+src/species.jl     Species, Model, charge_response, susceptibility, with_gradients
+src/fields.jl      Quasineutrality, Poisson, Darwin, Maxwell, dispersion, dispersion_matrix
 src/solve.jl       root finders and gradient scans
 test/runtests.jl   tests
 ```
 
-Not implemented: drift and toroidal terms, k_x ≠ 0 with shear, radial eigenvalue problem.
+Not implemented: drift and toroidal terms, gradients in the electromagnetic tensor, k_x ≠ 0 with
+shear, radial eigenvalue problem.
