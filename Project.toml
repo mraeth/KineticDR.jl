@@ -1,7 +1,7 @@
 name = "KineticDR"
 uuid = "945d438b-d22f-4fc6-81fd-d332b52ce193"
-version = "0.1.0"
 authors = ["Mario Raeth"]
+version = "0.1.0"
 
 [deps]
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -17,7 +17,7 @@ StaticArrays = "1"
 julia = "1.10"
 
 [extras]
-Test = "8dfed614-e22c-5e08-85e1-65bab5da0ebc"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test"]

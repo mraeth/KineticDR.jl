@@ -54,21 +54,22 @@ end
 """
     susceptibility(s, ω, k) -> χ̃_s (3×3)
 
-Susceptibility of species `s` in units of ω_pi²/Ω_i², b̂ = ẑ, k = (kx, 0, kz):
-χ̃_s = (q² N/m)/ω² · M(ω/|Ω_s|, k in species units), with M from `susceptibility(s.response, ...)`.
-Negative charge (opposite gyration) is the mirror image y → -y, kx < 0 the rotation by π about ẑ.
-Homogeneous background only: gradients throw.
+Susceptibility of species `s` in units of ω_pi²/Ω_i², b̂ = ẑ, any k⊥ = (kx, ky):
+χ̃_s = (q² N/m)/ω² · R M Rᵀ, with M = `susceptibility(s.response, ω/|Ω_s|, k)` in the species' units
+in the frame where k⊥ lies along x, and R the rotation about ẑ back to (kx, ky). Negative charge
+(opposite gyration) is the mirror image y → -y in that frame. Homogeneous background only: gradients throw.
 """
 function susceptibility(s::Species, ω, k::Wavevector)
-    k.ky == 0 || throw(ArgumentError("electromagnetic responses need k = (kx, 0, kz), got ky = $(k.ky)"))
     (s.κn == 0 && s.κT == 0) ||
         throw(ArgumentError("electromagnetic responses have no gradient drive; species has κn = $(s.κn), κT = $(s.κT)"))
     Ω, ks = _species_units(s, k)
-    M = susceptibility(s.response, ω / Ω, Wavevector(abs(ks.kx), 0.0, ks.kz))
+    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz))
     fy = s.q < 0 ? -1 : 1                                         # mirror y -> -y
-    fx = k.kx < 0 ? -1 : 1                                        # rotation by π: x, y -> -x, -y
-    F = SVector(fx, fx * fy, 1)
-    return (s.q^2 * s.N / s.m) / ω^2 * (F .* M .* transpose(F))
+    F = SVector(1, fy, 1)
+    kp = kperp(k)
+    c, sn = kp == 0 ? (1.0, 0.0) : (k.kx / kp, k.ky / kp)
+    R = @SMatrix [c -sn 0; sn c 0; 0 0 1]
+    return (s.q^2 * s.N / s.m) / ω^2 * (R * (F .* M .* transpose(F)) * transpose(R))
 end
 
 "Charge response q_s δn_s/φ in units e N_i/T_i: (q² N/T)(W − 1)."

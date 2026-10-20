@@ -23,7 +23,7 @@ struct Gyrokinetic <: AbstractResponse end
     GordeyevIntegral(; tmax_factor = 40)
 
 Direct evaluation of G = -iω ∫₀^∞ exp(-T k⊥²(1-cos t) - T kz² t²/2 + iωt) dt (Eq. 7) by
-quadrature, and of its T-derivative. Needs Im ω > 0 (or kz ≠ 0). For validation only.
+quadrature, and of its T-derivative. Needs Im ω > 0 or kz ≠ 0 (then also Im ω < 0). For validation only.
 """
 Base.@kwdef struct GordeyevIntegral <: AbstractResponse
     tmax_factor::Float64 = 40.0
@@ -51,11 +51,12 @@ function _series(ω, k::Wavevector, ps)
     return S, ST
 end
 
-# Harmonics -pm:pm to sum at x = k⊥²: Γ_p decreases monotonically in |p|, cut where Γ_p < tol.
+# Harmonics -pm:pm to sum at x = k⊥². The tensor weights Γ_p/x and dΓ_p as well as Γ_p: cut where
+# the next harmonic has Γ_p < tol min(x, 1) and |dΓ_p| < tol. At x = 0 only Γ_1/x → 1/2 survives.
 function _harmonics(r::GordeyevSeries, x)
     r.pmax !== nothing && return -r.pmax:r.pmax
-    pm = 0
-    while Gamma_p(pm + 1, x) > r.tol && pm < 5000
+    pm = x == 0 ? 1 : 0
+    while (Gamma_p(pm + 1, x) > r.tol * min(x, 1) || abs(dGamma_p(pm + 1, x)) > r.tol) && pm < 5000
         pm += 1
     end
     return -pm:pm
@@ -65,13 +66,17 @@ gordeyev(r::GordeyevSeries, ω, k::Wavevector) = _series(ω, k, _harmonics(r, kp
 
 gordeyev(::Gyrokinetic, ω, k::Wavevector) = _series(ω, k, 0:0)
 
+# Orbit-integral cut-off: the integrand is bounded by exp(-γt - kz² t²/2); stop where it is e^{-tmax_factor}.
+function _tmax(r::GordeyevIntegral, γ, kz2)
+    (γ > 0 || kz2 > 0) || throw(ArgumentError("GordeyevIntegral needs Im ω > 0 or kz ≠ 0"))
+    kz2 == 0 && return r.tmax_factor / γ
+    return (-γ + sqrt(γ^2 + 2 * kz2 * r.tmax_factor)) / kz2
+end
+
 function gordeyev(r::GordeyevIntegral, ω, k::Wavevector)
     x = kperp(k)^2
     kz2 = k.kz^2
-    γ = imag(ω)
-    (γ > 0 || kz2 > 0) || error("GordeyevIntegral needs Im ω > 0 or kz ≠ 0")
-    # integrand decays as exp(-γ t) and exp(-kz² t²/2); integrate over whole periods
-    tmax = min(γ > 0 ? r.tmax_factor / γ : Inf, kz2 > 0 ? sqrt(2 * r.tmax_factor / kz2) : Inf)
+    tmax = _tmax(r, imag(ω), kz2)
     nper = ceil(Int, tmax / (2π))
     base(t) = exp(-x * (1 - cos(t)) - kz2 * t^2 / 2 + im * ω * t)
     I0 = zero(complex(ω))
@@ -117,9 +122,11 @@ struct Cold <: AbstractResponse end
 """
     DriftKinetic(; polarization = false)
 
-m → 0 (ω ≪ |Ω_s|) limit for electrons: E×B Hall current, parallel Landau response
--ζ² Z'(ζ), ζ = ω/(√2 |k∥| v_t), and with `polarization = true` the polarisation drift
-(M_xx = M_yy = ω², i.e. χ_xx = m_e/m_i for electrons). Electromagnetic only.
+m → 0 limit of the hot tensor at fixed ζ = ω/(√2 |k∥| v_t) (electrons): E×B Hall current, parallel
+Landau response -ζ² Z'(ζ), and the n = 0 coupling to δB∥ (μ∇∥B force and perpendicular pressure):
+M_yy = 2b ζ Z(ζ), M_yz = -M_zy = -i √(b/2) ζ Z'(ζ), b = (k⊥ρ_t)², which stay finite in χ as m → 0.
+`polarization = true` adds the polarisation drift (M_xx = M_yy += ω², i.e. χ_xx = N m/q² in units
+of ω_pi²/Ω_i²). Electromagnetic only.
 """
 Base.@kwdef struct DriftKinetic <: AbstractResponse
     polarization::Bool = false
@@ -127,6 +134,8 @@ end
 
 susceptibility(r::AbstractResponse, ω, k::Wavevector) =
     throw(ArgumentError("$(nameof(typeof(r))) has no electromagnetic susceptibility"))
+gordeyev(r::Union{Cold,DriftKinetic}, ω, k::Wavevector) =
+    throw(ArgumentError("$(nameof(typeof(r))) is electromagnetic only (no electrostatic response)"))
 
 function susceptibility(::Cold, ω, k::Wavevector)
     d = ω^2 - 1
@@ -136,14 +145,17 @@ end
 
 function susceptibility(r::DriftKinetic, ω, k::Wavevector)
     S = r.polarization ? ω^2 : zero(ω^2)
+    b = kperp(k)^2
     κ = abs(k.kz)
     if κ == 0
-        P = -one(complex(ω))
+        A, B, P = -one(complex(ω)), zero(complex(ω)), -one(complex(ω))   # ζZ, ζZ', -ζ²Z' at |ζ| → ∞
     else
         ζ = ω / (sqrt(2.0) * κ)
-        P = 2ζ^2 * one_plus_zZ(ζ)                       # -ζ² Z'(ζ)
+        Zp = -2 * one_plus_zZ(ζ)
+        A, B, P = ζ * plasma_Z(ζ), ζ * Zp, -ζ^2 * Zp
     end
-    return @SMatrix [S im*ω 0; -im*ω S 0; 0 0 P]
+    yz = (k.kz < 0 ? 1 : -1) * im * sqrt(b / 2) * B
+    return @SMatrix [S im*ω 0; -im*ω S+2b*A yz; 0 -yz P]
 end
 
 # Stix hot-Maxwellian tensor (harmonics ns), b = k⊥², ζ_n = (ω - n)/(√2|k∥|). Elements odd in k∥
@@ -185,18 +197,16 @@ susceptibility(r::GordeyevSeries, ω, k::Wavevector) = _tensor_series(ω, k, _ha
 function susceptibility(r::GordeyevIntegral, ω, k::Wavevector)
     kp = kperp(k)
     kz = k.kz
-    γ = imag(ω)
-    (γ > 0 || kz != 0) || error("GordeyevIntegral needs Im ω > 0 or kz ≠ 0")
-    tmax = min(γ > 0 ? r.tmax_factor / γ : Inf, kz != 0 ? sqrt(2 * r.tmax_factor) / abs(kz) : Inf)
+    tmax = _tmax(r, imag(ω), kz^2)
     function G(τ)
         s, c = sincos(τ)
         a = SVector(-kp * s, kp * (1 - c), -kz * τ)
         R = @SMatrix [c -s 0; s c 0; 0 0 1]
         return (transpose(R) - a * transpose(R * a)) * exp(-(a' * a) / 2 + im * ω * τ)
     end
-    I = zero(SMatrix{3,3,complex(typeof(float(γ)))})
+    acc = zero(SMatrix{3,3,complex(typeof(float(imag(ω))))})
     for n in 0:(ceil(Int, tmax / (2π)) - 1)
-        I += quadgk(G, 2π * n, 2π * (n + 1); rtol = 1e-13)[1]
+        acc += quadgk(G, 2π * n, 2π * (n + 1); rtol = 1e-13)[1]
     end
-    return im * ω * I
+    return im * ω * acc
 end

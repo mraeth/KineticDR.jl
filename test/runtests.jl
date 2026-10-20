@@ -18,7 +18,9 @@ ion_W(m, ω, k) = nonadiabatic_response(m.species[1], ω, k)
     for x in (0.0, 0.3, 4.0, 50.0)
         @test sum(Gamma_p(p, x) for p in -400:400) ≈ 1 atol = 1e-12
     end
-    @test KD.one_plus_zZ(9.0 + 0.5im) ≈ 1 + (9.0 + 0.5im) * plasma_Z(9.0 + 0.5im) rtol = 1e-8
+    for ζ in (9.0 + 0.5im, 9.0 - 0.5im, 6.0 - 7.0im, -8.5 - 2.0im)       # below the axis: Landau term kept
+        @test KD.one_plus_zZ(ζ) ≈ 1 + ζ * plasma_Z(ζ) rtol = 1e-8
+    end
 end
 
 @testset "ion response" begin
@@ -200,41 +202,44 @@ end
     # ion terms S = -1/(ω²-1), D = 1/(ω(ω²-1)), P = -1/ω² and three electron closures (μ = m_e/m_i)
     β, μ = 0.1, 1 / 100
     # drift-kinetic electrons at T_e = T_i: at θ = 0 det = P (R - n²)(L - n²), so the transverse roots do
-    # not depend on the (kinetic) P; at θ = π/2, k∥ = 0 and P = -1/(μω²) exactly. Oblique: cold only.
+    # not depend on the (kinetic) P; at θ = π/2, k∥ = 0 and P = -1/(μω²) exactly, and the electron
+    # pressure adds -2K²/ω² = -β n² to χ_yy: X mode n² = (S² - D²)/(S(1 + β)). Oblique: cold only.
+    # Maxwell adds the vacuum term λ² to S and P.
     closures = [
         "cold electrons" => (Species(q = -1, m = μ, response = Cold()),
-                             w -> μ / (1 - μ^2 * w^2), w -> 1 / (w * (1 - μ^2 * w^2)), (0.0, π / 2, 0.7)),
-        "drift-kinetic"  => (Species(q = -1, m = μ, response = DriftKinetic()), w -> 0.0, w -> 1 / w, (0.0, π / 2)),
+                             w -> μ / (1 - μ^2 * w^2), w -> 1 / (w * (1 - μ^2 * w^2)), (0.0, π / 2, 0.7), 0.0),
+        "drift-kinetic"  => (Species(q = -1, m = μ, response = DriftKinetic()), w -> 0.0, w -> 1 / w, (0.0, π / 2), β),
         "drift-kinetic + polarisation" =>
-                            (Species(q = -1, m = μ, response = DriftKinetic(polarization = true)), w -> μ, w -> 1 / w, (0.0, π / 2)),
+                            (Species(q = -1, m = μ, response = DriftKinetic(polarization = true)), w -> μ, w -> 1 / w, (0.0, π / 2), β),
     ]
     nfound = 0
-    for (name, (el, sE, dE, θs)) in closures, θ in θs, w in (0.4, 3.0)
-        m = Model((Species(response = Cold()), el), Darwin(beta = β))
-        S = -1 / (w^2 - 1) + sE(w)
+    for (name, (el, sE, dE, θs, βe)) in closures, θ in θs, w in (0.4, 3.0), λ2 in (0.0, 0.05)
+        m = Model((Species(response = Cold()), el), λ2 == 0 ? Darwin(beta = β) : Maxwell(beta = β, lambda2 = λ2))
+        S = -1 / (w^2 - 1) + sE(w) + λ2
         D = 1 / (w * (w^2 - 1)) + dE(w)
-        P = -1 / w^2 - 1 / (μ * w^2)
+        P = -1 / w^2 - 1 / (μ * w^2) + λ2
         s2, c2 = sin(θ)^2, cos(θ)^2
         A, B, C = S * s2 + P * c2, (S^2 - D^2) * s2 + P * S * (1 + c2), P * (S^2 - D^2)
         q = sqrt(complex(B^2 - 4A * C))
-        for n2 in ((B + q) / 2A, (B - q) / 2A)
+        n2s = θ == π / 2 ? (P, (S^2 - D^2) / (S * (1 + βe))) : ((B + q) / 2A, (B - q) / 2A)
+        for n2 in n2s
             K2 = β / 2 * w^2 * n2
             (abs(imag(K2)) < 1e-12 && 1e-3 < real(K2) < 25) || continue
             K = sqrt(real(K2))
             kz = θ == π / 2 ? 0.0 : K * cos(θ)                     # exact k∥ = 0, not K cos(π/2) ≈ 1e-17 K
-            ωr, ok = find_root(m, Wavevector(kx = K * sin(θ), kz = kz), 1.001 * w; δ = 1e-4 * w, maxstep = 0.01 * w)
+            ωr, ok = find_root(m, Wavevector(kx = K * sin(θ), ky = 0.0, kz = kz), 1.001 * w; δ = 1e-4 * w, maxstep = 0.01 * w)
             @test ok
             @test ωr ≈ w rtol = 1e-10
             nfound += 1
         end
     end
-    @test nfound >= 12
+    @test nfound >= 24
 
     # (2) series against the orbit integral (all nine elements), ions and electrons, signs of kx and kz
     ω = 0.6 + 0.05im
     for (q, m) in ((1, 1.0), (-1, 1 / 100)),
-        k in (Wavevector(kx = 0.7, kz = 0.3), Wavevector(kx = -0.7, kz = 0.3), Wavevector(kx = 0.7, kz = -0.3),
-              Wavevector(kx = 1.3, kz = 0.02))
+        k in (Wavevector(kx = 0.7, ky = 0.0, kz = 0.3), Wavevector(kx = -0.7, ky = 0.0, kz = 0.3), Wavevector(kx = 0.7, ky = 0.0, kz = -0.3),
+              Wavevector(kx = 1.3, ky = 0.0, kz = 0.02))
         A = susceptibility(Species(; q, m), ω, k)
         B = susceptibility(Species(; q, m, response = GordeyevIntegral()), ω, k)
         @test maximum(abs.(A - B)) < 1e-11 * maximum(abs.(A))
@@ -242,12 +247,12 @@ end
         kv = [k.kx, 0, k.kz]
         @test transpose(kv) * A * kv ≈ -charge_response(Species(; q, m), ω, k) rtol = 1e-12
     end
-    k0 = Wavevector(kx = 0.9, kz = 0.0)
+    k0 = Wavevector(kx = 0.9, ky = 0.0, kz = 0.0)
     @test transpose([0.9, 0, 0]) * susceptibility(Species(), ω, k0) * [0.9, 0, 0] ≈ -charge_response(Species(), ω, k0) rtol = 1e-12
 
     # (4) hot -> cold for T -> 0 (ions and finite-mass electrons; checks the mirror for q < 0):
     # thermal corrections are O(T), so the error must drop 100× from T = 1e-8 to 1e-10
-    k = Wavevector(kx = 0.8, kz = 0.5)
+    k = Wavevector(kx = 0.8, ky = 0.0, kz = 0.5)
     ωc = 0.37 + 0.01im
     for (q, m) in ((1, 1.0), (-1, 1 / 100))
         cold = susceptibility(Species(; q, m, response = Cold()), ωc, k)
@@ -258,17 +263,17 @@ end
 
     # (5) drift-kinetic parallel response = k⊥ = 0 zz element of the hot tensor
     e(r) = Species(q = -1, m = 1 / 100, response = r)
-    kz = Wavevector(kz = 0.3)
+    kz = Wavevector(ky = 0.0, kz = 0.3)
     @test susceptibility(e(DriftKinetic()), ω, kz)[3, 3] ≈ susceptibility(e(GordeyevSeries()), ω, kz)[3, 3] rtol = 1e-12
 
     # (6) Alfvén wave: θ = 0, K -> 0 gives ω/K = v_A/v_ti = √(2/β) (ion-cyclotron correction O(ω))
     mA = Model((Species(response = Cold()), Species(q = -1, m = μ, T = 1e-12, response = DriftKinetic())), Darwin(beta = 1.0))
     KA = 1e-3
-    ωA, okA = find_root(mA, Wavevector(kz = KA), KA * sqrt(2.0); δ = 1e-6)
+    ωA, okA = find_root(mA, Wavevector(ky = 0.0, kz = KA), KA * sqrt(2.0); δ = 1e-6)
     @test okA && abs(real(ωA) / (KA * sqrt(2.0)) - 1) < 1e-3
 
     # (7) Hermitian for real ω, k∥ = 0, off-harmonic (no dissipation)
-    χh = susceptibility(Species(), 0.5, Wavevector(kx = 1.2))
+    χh = susceptibility(Species(), 0.5, Wavevector(kx = 1.2, ky = 0.0))
     @test χh ≈ χh' atol = 1e-14
 
     # (8) Maxwell with λ² -> 0 is Darwin; the longitudinal part is Poisson
@@ -279,8 +284,36 @@ end
     kv = [k.kx, 0, k.kz]
     @test transpose(kv) * dispersion_matrix(mλ, ω, k) * kv ≈ dispersion(Model(mD.species, Poisson(lambda2 = 0.01)), ω, k) rtol = 1e-12
 
-    # (9) guards
-    @test_throws ArgumentError dispersion(mD, ω, Wavevector(kx = 0.3, ky = 0.2, kz = 0.1))
+    # (9) any direction of k⊥: 𝒟 rotates about b̂, so det is invariant
+    for m in (mD, mλ)
+        @test dispersion(m, ω, Wavevector(kx = 0.3, ky = 0.4, kz = 0.1)) ≈ dispersion(m, ω, Wavevector(kx = 0.5, ky = 0.0, kz = 0.1)) rtol = 1e-12
+        @test dispersion(m, ω, Wavevector(kx = 0.0, ky = -0.5, kz = 0.1)) ≈ dispersion(m, ω, Wavevector(kx = 0.5, ky = 0.0, kz = 0.1)) rtol = 1e-12
+    end
+    ky = Wavevector(kx = 0.0, ky = 0.7, kz = 0.3)
+    kv = [0.0, 0.7, 0.3]
+    @test transpose(kv) * susceptibility(Species(q = -1, m = μ), ω, ky) * kv ≈ -charge_response(Species(q = -1, m = μ), ω, ky) rtol = 1e-12
+
+    # (10) parallel propagation and k⊥ → 0: series against the orbit integral, also below the real axis
+    for (q, m) in ((1, 1.0), (-1, 1 / 100)), kx in (0.0, 1e-9, 3e-8, 0.4), ωt in (0.6 + 0.05im, 0.6 - 0.05im, 0.3 - 0.2im)
+        k = Wavevector(kx = kx, ky = 0.0, kz = 0.3)
+        A = susceptibility(Species(; q, m), ωt, k)
+        B = susceptibility(Species(; q, m, response = GordeyevIntegral()), ωt, k)
+        @test maximum(abs.(A - B)) < 1e-10 * maximum(abs.(A))
+    end
+    @test abs(susceptibility(Species(), 0.6 + 0.05im, Wavevector(ky = 0.0, kz = 0.3))[1, 1]) > 0.1
+
+    # (11) DriftKinetic is the m → 0 limit of the hot tensor at fixed ζ (k∥ ∝ √m), element-wise in χ
+    function dkerr(me)
+        k = Wavevector(kx = 0.5, ky = 0.0, kz = 0.05 * sqrt(me / 1e-2))
+        A = susceptibility(Species(q = -1, m = me), 0.3 + 0.01im, k)
+        B = susceptibility(Species(q = -1, m = me, response = DriftKinetic()), 0.3 + 0.01im, k)
+        return maximum(abs.(A - B)[i, j] / max(abs(B[i, j]), 1.0) for i in 1:3, j in 1:3)
+    end
+    @test dkerr(1e-6) < 1e-2
+    @test dkerr(1e-6) < 0.1 * dkerr(1e-4)
+
+    # (12) guards
+    @test_throws ArgumentError dispersion(Model((Species(response = Cold()), Species(q = -1, response = Boltzmann())), Quasineutrality()), ω, k)
     @test_throws ArgumentError dispersion(Model((Species(), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), ω, k)
     @test_throws ArgumentError dispersion(Model((Species(κn = 0.1), Species(q = -1, m = μ)), Darwin(beta = β)), ω, k)
 end

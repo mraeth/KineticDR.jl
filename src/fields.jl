@@ -1,5 +1,7 @@
-# Field equations. Interface: residual(field, ρs, k), where ρs is the tuple of charge-density
-# responses q_s δn_s / φ of all species (`charge_response`).
+# Field equations. Interface of every field: dispersion(model, ω, k), the function whose roots the
+# solvers find. Electrostatic fields implement it through residual(field, ρs, k), where ρs is the
+# tuple of charge-density responses q_s δn_s / φ of all species (`charge_response`); electromagnetic
+# fields (`AbstractEMField`) through `dispersion_matrix`.
 
 "Quasineutrality, Σ_s q_s δn_s = 0. Residual -Σ ρs: equals 2 - ∫h/φ for ions + Boltzmann electrons at T_e = T_i."
 struct Quasineutrality <: AbstractFieldEquation end
@@ -28,8 +30,9 @@ abstract type AbstractEMField <: AbstractFieldEquation end
 """
     Darwin(; beta)
 
-Darwin (no displacement current, no vacuum term) electromagnetic closure, as in hybrid
-kinetic-ion/fluid-electron models. The longitudinal part of 𝒟 is quasineutrality.
+Quasineutral Darwin closure: no displacement current and no vacuum term at all, as in hybrid
+kinetic-ion/fluid-electron models, so the longitudinal part of 𝒟 is quasineutrality. (Classical
+Darwin keeps the longitudinal displacement current, i.e. Poisson: that is `Maxwell`'s longitudinal part.)
 """
 struct Darwin{T<:Real} <: AbstractEMField
     beta::T
@@ -39,7 +42,8 @@ Darwin(; beta) = Darwin(float(beta))
 """
     Maxwell(; beta, lambda2)
 
-Full Maxwell: adds the vacuum term `lambda2` = (λ_D/ρ_i)² = (v_A/c)² = (Ω_i/ω_pi)² to the diagonal.
+Full Maxwell: adds the vacuum term `lambda2` = (λ_D/ρ_i)² = (v_A/c)² = (Ω_i/ω_pi)² to the diagonal;
+the longitudinal part is Poisson.
 """
 struct Maxwell{T<:Real} <: AbstractEMField
     beta::T
