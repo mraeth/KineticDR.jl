@@ -1,7 +1,8 @@
 using Test
 using KineticDR
 using QuadGK: quadgk
-using LinearAlgebra: norm
+using SpecialFunctions: besselj
+using LinearAlgebra: eigen, SymTridiagonal, Diagonal
 using PlasmaCore: ScalarField
 
 const KD = KineticDR
@@ -320,141 +321,128 @@ end
     @test_throws ArgumentError dispersion(Model((Species(κn = 0.1), Species(q = -1, m = μ)), Darwin(beta = β)), ω, k)
 end
 
-@testset "quadratic average" begin
-    brute(n0, n2, a, b, e) = quadgk(s -> exp(-s^2 / 2) / sqrt(2π) * (n0 + n2 * s^2) / (a * s^2 - b * s + e),
-                                    -12, 12; rtol = 1e-12, atol = 0)[1]
-    for (a, b, e) in ((0.01, 0.02, 0.01 + 0.01im), (-0.02, 0.05, -0.03 + 0.002im),
-                      (0.05, 0.0, 0.02 + 0.02im), (0.01, 0.02, -0.04 + 0.01im))
-        @test KD.quadratic_average(0.3 + 0.1im, -0.15, a, b, e) ≈ brute(0.3 + 0.1im, -0.15, a, b, e) rtol = 1e-10
-    end
-    # a → 0 is the linear-denominator moments
-    I0, I2 = KD.linear_moments(0.02 + 0.01im, 0.03)
-    @test KD.quadratic_average(0.3, 0.1, 1e-9, 0.03, 0.02 + 0.01im) ≈ 0.3 * I0 + 0.1 * I2 rtol = 1e-6
-    # no cancellation at small a (a fixed linear/quadratic switch lost up to 3 digits here)
-    for a in (1e-12, 4e-8, 1e-7, 1e-6, -1e-6)
-        @test KD.quadratic_average(0.3 + 0.1im, -0.15, a, 0.3, 0.1 + 0.05im) ≈
-              brute(0.3 + 0.1im, -0.15, a, 0.3, 0.1 + 0.05im) rtol = 1e-12
-    end
-    # linear moments below the real axis are Z's continuation, also past the asymptotic switch |ζ| = 6
-    direct(ω, q) = (I0 = -plasma_Z(ω / (sqrt(2) * q)) / (sqrt(2) * q); (I0, (ω / q)^2 * I0 - ω / q^2))
-    for ζ in (5.999, 6.001, 9.0), arg in (-0.05π, -0.3π, -0.45π)
-        ω = sqrt(2) * 0.01 * ζ * cis(arg)
-        @test all(isapprox.(KD.linear_moments(ω, 0.01), direct(ω, 0.01); rtol = 1e-11))
-    end
-    @test KD.linear_moments(-0.1im, 0.01)[1] ≈ direct(-0.1im, 0.01)[1] rtol = 1e-12
-    # analytic across Im e = 0 (the labelling of the roots is by continuation): complex derivative
-    # along the real and imaginary direction agree, also with Im e < 0
-    f(e) = KD.quadratic_average(0.3, 0.1, 0.01, 0.02, e)
-    for e0 in (0.02 + 0.0im, 0.03 - 0.004im, -0.01 + 0.0im)
-        h = 1e-6
-        @test (f(e0 + h) - f(e0 - h)) / 2h ≈ (f(e0 + im * h) - f(e0 - im * h)) / (2im * h) rtol = 1e-5
-    end
-end
-
-@testset "gyrokinetic drift response" begin
-    ky, R0, ω = 0.5, 50.0, -0.03 + 0.01im
-    k = Wavevector(ky = ky, kz = 0.02)
-    for alpha in (0.0, 1.0)
-        s = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 1 / R0, alpha = alpha, nmu = 200))
-        # independent: direct double quadrature in (s, μ), Im ω > 0
-        W = quadgk(μ -> exp(-μ) * KD.besselj0(ky * sqrt(2μ))^2 * quadgk(v -> begin
-                ωD = -ky * (v^2 + μ) / R0
-                ωs = ky * (-0.04 + -0.16 * (μ + v^2 / 2 - 1.5))
-                exp(-v^2 / 2) / sqrt(2π) * (ω - alpha * ωD - ωs) / (ω - k.kz * v - ωD)
-            end, -12, 12; rtol = 1e-11)[1], 0, 40; rtol = 1e-9)[1]
-        @test nonadiabatic_response(s, ω, k) ≈ W rtol = 1e-6
-    end
-    # kinetic electrons: ω_D ∝ T_s/q_s, i.e. sgn(q) enters the rescaling to own units
-    e = Species(q = -1, m = 1 / 100, T = 2.0, κn = -0.04, κT = -0.16,
-                response = GyrokineticDrift(c = 0.02, cperp = 0.03, alpha = 1.0, nmu = 800))
-    ke, ωe, vt, ρ = Wavevector(ky = 0.5, kz = 0.002), 0.03 + 0.01im, sqrt(200.0), sqrt(0.02)
-    We = quadgk(μ -> exp(-μ) * KD.besselj0(ke.ky * ρ * sqrt(2μ))^2 * quadgk(v -> begin
-            ωD = 2 * ke.ky * (0.02 * v^2 + 0.03 * μ)              # -k_y (T/q)(c s² + c⊥ μ), T/q = -2
-            ωs = -2 * ke.ky * (-0.04 + -0.16 * (μ + v^2 / 2 - 1.5))
-            exp(-v^2 / 2) / sqrt(2π) * (ωe - ωD - ωs) / (ωe - ke.kz * vt * v - ωD)
-        end, -14, 14; rtol = 1e-12)[1], 0, 5, 20, 60; rtol = 1e-11)[1]
-    @test nonadiabatic_response(e, ωe, ke) ≈ We rtol = 1e-6
-    # c → 0 is Gyrokinetic
-    g = Species(κT = -0.3, response = Gyrokinetic())
-    d = Species(κT = -0.3, response = GyrokineticDrift(c = 1e-12, nmu = 32))
-    @test nonadiabatic_response(d, ω, k) ≈ nonadiabatic_response(g, ω, k) rtol = 1e-9
-    # local roots (R/L_T = 8, R/L_n = 2) are valid solutions of D, reproduced by the radial operator below
-    for (alpha, ref) in ((0.0, -0.0289898331 + 0.0130943411im), (1.0, -0.0216328565 + 0.0162489625im))
-        ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, alpha = alpha, nmu = 160))
-        m = Model((ion, adiabatic_electrons()), Quasineutrality())
-        ω0 = find_modes(m, Wavevector(ky = 0.5); re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
-        @test ω0 ≈ ref atol = 1e-8
-    end
-end
-
 @testset "radial operator" begin
     mg = radial_grid(-20, 20, 40; bc = :mirror)
     rgrid = (-0.08:0.01:0.0, (0.002, 0.01, 0.02))
-    # uniform k∥: the operator is singular at the local root with a flat null vector
+    # uniform profiles: the operator is singular at the local root of the same model, flat null vector
+    m = Model((Species(κT = -0.3, response = Gyrokinetic()), adiabatic_electrons()), Quasineutrality())
     for kz in (0.01, 0.02)
-        m = RadialModel(; ky = 0.5, kpar = x -> kz, κT = x -> -0.3)
-        loc = find_modes(local_model(m, 0.0)...; re = rgrid[1], imag = rgrid[2], imin = 0.0)[1]
-        λ, φ = KD.smallest(operator(mg, m, loc))
+        k = Wavevector(ky = 0.5, kz = kz)
+        loc = find_modes(m, k; re = rgrid[1], imag = rgrid[2], imin = 0.0)[1]
+        λ, φ = KD.smallest(operator(mg, m, k, loc))
         @test abs(λ) < 1e-10
         @test maximum(abs.(φ ./ φ[1] .- 1)) < 1e-9
     end
-    # uniform drift: the radial eigenvalue is the local root, α = 0 and 1
-    for alpha in (0.0, 1.0)
-        m = RadialModel(; ky = 0.5, drift = x -> 1 / 50, κT = x -> -8 / 50, κn = x -> -2 / 50, alpha)
-        loc = find_modes(local_model(m, 0.0)...; re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
-        r = eigenmode(mg, m, loc * 1.02)
-        @test r.converged
-        @test r.ω ≈ loc rtol = 1e-9
-    end
-    # sheared slab, L_s = 200, Dirichlet walls: converged against N and nμ
-    m = sheared_slab(; ky = 0.5, Ls = 200.0, κT = -0.3)
-    ref = eigenmode(radial_grid(-20, 20, 120), m, -0.0241 + 0.0034im)
+    # localised by the profile: κT = -0.3 sech²(x/4), electrons with the ion particle density (bsl6d's
+    # convention), Dirichlet walls; converged against N, and the walls do not matter
+    T(x) = exp(-1.2 * tanh(x / 4))
+    ionp = species_profile(; T, response = Gyrokinetic())
+    mp = Model((ionp, species_profile(; q = -1, N = particle_density(ionp), response = Boltzmann())), Quasineutrality())
+    kp = Wavevector(ky = 0.5, kz = 0.01)
+    ω0 = local_roots(mp, kp, [0.0]; re = rgrid[1], imag = rgrid[2])[1]
+    ref = eigenmode(radial_grid(-20, 20, 120), mp, kp, ω0)
     @test ref.converged
-    @test ref.ω ≈ -0.024124 + 0.003427im atol = 2e-6
+    @test ref.ω ≈ -0.027990992483326 + 0.006821667129586im atol = 1e-11
     @test ref.φ isa ScalarField && length(ref.φ) == 120 && ref.φ[1] == 0
-    for (N, nmu) in ((80, 24), (80, 16), (80, 32))
-        r = eigenmode(radial_grid(-20, 20, N; nmu), m, -0.0241 + 0.0034im)
-        @test r.ω ≈ ref.ω atol = 1e-7
+    for N in (80, 160)
+        @test eigenmode(radial_grid(-20, 20, N), mp, kp, ω0).ω ≈ ref.ω atol = 1e-11
     end
-    # a centrally localised mode does not see the wall condition
-    rmir = eigenmode(radial_grid(-20, 20, 120; bc = :mirror), m, -0.0241 + 0.0034im)
+    rmir = eigenmode(radial_grid(-20, 20, 120; bc = :mirror), mp, kp, ω0)
     @test rmir.converged
-    @test rmir.ω ≈ ref.ω atol = 1e-9
+    @test rmir.ω ≈ ref.ω atol = 1e-11
     # the argument principle sees every eigenvalue, the seeded search only some
     g = radial_grid(-20, 20, 80)
-    found = find_eigenmodes(g, m; re = -0.04:0.005:0.0, imag = 0.001:0.002:0.006)
-    inrect(ω) = -0.04 < real(ω) < 0 && 0.0005 < imag(ω) < 0.006
-    @test count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006) >= count(r -> inrect(r.ω), found) >= 1
-    # drift in the radial operator: A is analytic through the real axis (Im ω < 0 is the continuation):
-    # complex derivative along the real and the imaginary direction agree
-    md = RadialModel(; ky = 0.5, drift = x -> 1 / 50, κT = x -> -8 / 50)
-    ω0, h = -0.0123 + 0.0im, 1e-7
-    dA_re = (operator(mg, md, ω0 + h) - operator(mg, md, ω0 - h)) / 2h
-    dA_im = (operator(mg, md, ω0 + im * h) - operator(mg, md, ω0 - im * h)) / (2im * h)
-    @test norm(dA_re - dA_im) < 1e-4 * norm(dA_re)
+    found = find_eigenmodes(g, mp, kp; re = -0.06:0.005:0.0, imag = 0.001:0.002:0.015)
+    @test any(r -> abs(r.ω - ref.ω) < 1e-10, found)
+    @test count_eigenvalues(g, mp, kp, -0.06, 0.0, 0.001, 0.015) >= length(found) >= 1
 end
 
 @testset "radial species interface" begin
     # any tuple of species and field: at uniform profiles the operator is singular at the local root,
     # with a flat null vector (k_x = 0 mode of the mirror basis)
-    g = radial_grid(-20, 20, 40; bc = :mirror, nmu = 160)
-    ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
-    el = Species(q = -1, m = 1 / 400, κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
-    for (sp, field) in (((ion, el), Quasineutrality()),                                   # kinetic electrons
-                        ((ion, Species(q = -1, response = Boltzmann())), Poisson(lambda2 = 0.5)))
-        m = RadialModel(sp, field; ky = 0.5, kpar = x -> 0.01)
-        loc = find_modes(local_model(m, 0.0)...; re = -0.08:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[end]
-        λ, φ = KD.smallest(operator(g, m, loc))
+    g = radial_grid(-20, 20, 40; bc = :mirror)
+    k = Wavevector(ky = 0.5, kz = 0.01)
+    ion = Species(κn = -0.05, κT = -0.3, response = Gyrokinetic())
+    el = Species(q = -1, m = 1 / 400, κn = -0.05, κT = -0.3, response = Gyrokinetic())
+    for m in (Model((ion, el), Quasineutrality()),                                        # kinetic electrons
+              Model((ion, adiabatic_electrons()), Poisson(lambda2 = 0.5)))
+        loc = find_modes(m, k; re = -0.08:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[end]
+        λ, φ = KD.smallest(operator(g, m, k, loc))
         @test abs(λ) < 1e-12
         @test maximum(abs.(φ ./ φ[1] .- 1)) < 1e-10
     end
-    # profiles as functions x -> Species: the keyword constructor is this ion + Boltzmann model
-    m1 = sheared_slab(; ky = 0.5, Ls = 200.0, κT = -0.3)
-    m2 = RadialModel((x -> Species(κT = -0.3, response = Gyrokinetic()), Species(q = -1, response = Boltzmann()));
-                     ky = 0.5, kpar = x -> 0.5 * x / 200)
+    # a uniform Species and the constant profile x -> Species are the same operator
     g2 = radial_grid(-20, 20, 40)
-    @test operator(g2, m1, -0.024 + 0.003im) == operator(g2, m2, -0.024 + 0.003im)
-    # not (yet) radial: electromagnetic fields, full-orbit responses
-    @test_throws ArgumentError RadialModel((ion, el), Darwin(beta = 0.1); ky = 0.5)
-    @test_throws ArgumentError operator(g2, RadialModel((Species(), el); ky = 0.5), 0.1 + 0.01im)
+    ionG = Species(κT = -0.3, response = Gyrokinetic())
+    @test operator(g2, Model((ionG, adiabatic_electrons()), Quasineutrality()), k, -0.024 + 0.003im) ≈
+          operator(g2, Model((x -> ionG, adiabatic_electrons()), Quasineutrality()), k, -0.024 + 0.003im) rtol = 1e-12
+    # species_profile: κ from N(x), T(x); x-dependent response; same operator as the hand-built species
+    N, T = x -> 1 + 0.2tanh(x / 4), x -> 1 + 0.4tanh(-x / 1.5)
+    sp = species_profile(; N, T, response = x -> Gyrokinetic())
+    hand(x) = Species(; N = N(x), T = T(x), κn = log_gradient(N)(x), κT = log_gradient(T)(x), response = Gyrokinetic())
+    @test sp(1.3).κT ≈ -0.4 / 1.5 * sech(1.3 / 1.5)^2 / T(1.3) rtol = 1e-7
+    @test sp(1.3).κn ≈ 0.2 / 4 * sech(1.3 / 4)^2 / N(1.3) rtol = 1e-7
+    m3 = Model((sp, species_profile(; q = -1, N, response = Boltzmann())), Quasineutrality())
+    m4 = Model((hand, x -> Species(q = -1, N = N(x), response = Boltzmann())), Quasineutrality())
+    @test operator(g2, m3, k, -0.024 + 0.003im) == operator(g2, m4, k, -0.024 + 0.003im)
+    # model(x) is the local model; local solvers reject an unevaluated profile model
+    @test m3(1.3).species[2] == Species(q = -1, N = N(1.3), κn = log_gradient(N)(1.3), response = Boltzmann())
+    @test (m3(1.3).species[1].T, m3(1.3).species[1].κT) == (T(1.3), sp(1.3).κT)
+    @test dispersion(m3(1.3), 0.01 + 0.01im, k) isa Complex
+    @test_throws ArgumentError dispersion(m3, 0.01 + 0.01im, k)
+    # not (yet) radial: electromagnetic fields, full-orbit responses, k_x ≠ 0, non-finite guess
+    @test_throws ArgumentError operator(g2, Model((ion, el), Darwin(beta = 0.1)), k, 0.1 + 0.01im)
+    @test_throws ArgumentError operator(g2, Model((Species(), el), Quasineutrality()), k, 0.1 + 0.01im)
+    @test_throws ArgumentError operator(g2, m3, Wavevector(kx = 0.1, ky = 0.5), 0.1 + 0.01im)
+    @test_throws ArgumentError eigenmode(g2, m3, k, complex(NaN, NaN))
+end
+
+@testset "radial: closed-form μ integral and particle density" begin
+    # Weber's second integral against quadrature, real and complex arguments, up to large k⊥ρ
+    for p in 0:2, (a, b) in ((0.7, 1.9), (0.3 + 0.2im, 1.1 - 0.1im), (6.0, 7.5))
+        W(k) = quadgk(μ -> exp(-μ) * μ^k * besselj(p, a * sqrt(2μ)) * besselj(p, b * sqrt(2μ)), 0, Inf; rtol = 1e-13)[1]
+        W0, W1 = KD.weber(p, a, b)
+        @test W0 ≈ W(0) atol = 1e-14
+        @test W1 ≈ W(1) atol = 1e-13
+    end
+    @test KD.weber(1, 1.3, 1.3)[1] ≈ Gamma_p(1, 1.3^2) rtol = 1e-14
+    # v∥ average against quadrature (Im ω > 0), and its k_z = 0 limit
+    s = Species(T = 1.3, m = 2.0, κn = -0.1, κT = -0.3)
+    kv = Wavevector(ky = 0.7, kz = 0.05)
+    for ω in (0.02 + 0.01im, -0.05 + 0.002im), μ in (0.4, 2.0)
+        ωs(v) = s.T / s.q * kv.ky * (s.κn + s.κT * (μ + v^2 / 2 - 1.5))
+        direct = quadgk(v -> exp(-v^2 / 2) / sqrt(2π) * (ω - ωs(v)) / (ω - kv.kz * thermal_speed(s) * v), -Inf, Inf; rtol = 1e-12)[1]
+        @test KD.vpar_response(kv, s, ω, μ) ≈ direct rtol = 1e-10
+        @test KD.vpar_response(Wavevector(ky = 0.7), s, ω, μ) ≈ (ω - ωs(1.0)) / ω rtol = 1e-14
+    end
+    # the operator is the μ integral done by quadrature (128 Gauss–Laguerre nodes): nonuniform N, T, κ ≠ 0,
+    # both bases (small N: the quadrature resolves every k_x)
+    function quadrature_operator(g, m, k, ω; n = 128)
+        E = eigen(SymTridiagonal([2j + 1.0 for j in 0:(n - 1)], [Float64(j) for j in 1:(n - 1)]))
+        ss = [m.species[1](x) for x in g.x]                      # species 1 kinetic, the others Boltzmann
+        A = Matrix{ComplexF64}(Diagonal([sum(KD.adiabatic_term(sp, x) for sp in m.species) for x in g.x]))
+        for (μ, w) in zip(E.values, E.vectors[1, :] .^ 2)
+            G = [g.C[j, l] * besselj(0, hypot(g.k[l], k.ky) * sqrt(2μ * s.T * s.m) / abs(s.q)) for (j, s) in enumerate(ss), l in eachindex(g.k)]
+            J = G * g.Cinv
+            A -= J' * Diagonal([w * s.q^2 * s.N / s.T * KD.vpar_response(k, s, ω, μ) for s in ss]) * J
+        end
+        return A
+    end
+    N, T = x -> 1 + 0.3tanh(x / 3), x -> exp(-0.8tanh(x / 2))
+    k = Wavevector(ky = 0.7, kz = 0.02)
+    mw = Model((species_profile(; N, T, response = Gyrokinetic()), species_profile(; q = -1, N, response = Boltzmann())), Quasineutrality())
+    for bc in (:dirichlet, :mirror)
+        g = radial_grid(-15, 15, 40; bc)
+        Aw = operator(g, mw, k, -0.03 + 0.01im)
+        @test maximum(abs.(Aw - quadrature_operator(g, mw, k, -0.03 + 0.01im))) < 1e-13 * maximum(abs.(Aw))
+    end
+    # particle density of an exponential guiding-centre profile: n e^{κ² ρ_t²/2}, ρ_t² = T m/q²
+    @test particle_density(species_profile(; N = x -> exp(0.5x)))(0.3) ≈ exp(0.15 + 0.125) rtol = 1e-12
+    @test particle_density(species_profile(; N = x -> exp(0.5x), T = x -> 2.0, m = 4.0, q = 2.0))(0.3) ≈
+          exp(0.15 + 0.25) rtol = 1e-12
+    # adiabatic term: q² ∫F/T d³v at the particle position for a kinetic profile, N/T at the node otherwise
+    ion = species_profile(; N = x -> exp(0.5x), response = Gyrokinetic())
+    @test KD.adiabatic_term(ion, 0.3) ≈ exp(0.15 + 0.125) rtol = 1e-12
+    @test KD.adiabatic_term(species_profile(; q = -1, N = x -> exp(0.5x), response = Boltzmann()), 0.3) == exp(0.15)
+    @test KD.adiabatic_term(Species(N = 0.8, T = 1.3), 0.3) == 0.8 / 1.3
 end
