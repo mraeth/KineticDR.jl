@@ -8,10 +8,11 @@ potentials in T_i/e.
 """
 module KineticDR
 
-using LinearAlgebra: SymTridiagonal, eigen, det, mul!, opnorm
+using LinearAlgebra: SymTridiagonal, eigen, det, mul!, opnorm, I
 using PlasmaCore: Grid, ScalarField
 using SpecialFunctions: erfcx, besselix, besselj0
 using QuadGK: quadgk
+using StaticArrays: SMatrix, SVector, @SMatrix
 
 include("special.jl")
 include("types.jl")
@@ -23,10 +24,12 @@ include("solve.jl")
 include("radial.jl")
 
 export Wavevector, kperp
-export AbstractResponse, GordeyevSeries, GordeyevIntegral, Gyrokinetic, GyrokineticDrift, Boltzmann, gordeyev
+export AbstractResponse, GordeyevSeries, GordeyevIntegral, Gyrokinetic, GyrokineticDrift, Boltzmann, Cold, DriftKinetic
+export gordeyev, susceptibility
 export Species, Model, nonadiabatic_response, charge_response, with_gradients
 export cyclotron_frequency, thermal_speed, thermal_gyroradius
 export AbstractFieldEquation, Quasineutrality, Poisson, residual, dispersion
+export AbstractEMField, Darwin, Maxwell, dispersion_matrix
 export plasma_Z, Gamma_p, dGamma_p
 export muller, find_root, find_modes, track_branch, count_roots, gradient_coefficients,
        neutral_gradients, harmonic_root, critical_kappaT

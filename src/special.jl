@@ -3,9 +3,10 @@
 "Fried–Conte function Z(ζ) = i√π w(ζ), analytically continued to Im ζ < 0."
 plasma_Z(ζ) = im * sqrt(π) * erfcx(-im * ζ)
 
-# 1 + ζ Z(ζ) without cancellation at large |ζ| (asymptotic series, valid for Im ζ ≥ 0).
+# 1 + ζ Z(ζ) without cancellation at large |ζ| (asymptotic series plus, for Im ζ < 0, the
+# Landau term 2i√π ζ e^{-ζ²} of the continued Z).
 function one_plus_zZ(ζ)
-    if abs(ζ) > 8 && imag(ζ) >= 0
+    if abs(ζ) > 8
         w = 1 / (2ζ^2)
         s = zero(ζ)
         t = one(ζ)
@@ -13,8 +14,9 @@ function one_plus_zZ(ζ)
             t *= (2n - 1) * w
             s -= t
         end
-        # The resonant part i√π ζ e^{-ζ²} is dropped: for |ζ| > 8 and Im ζ ≥ 0 it is either
-        # below e^{-32} (|Re ζ| > |Im ζ|) or absent from Z (upper half plane, Stokes sector).
+        # For Im ζ ≥ 0 the resonant part i√π ζ e^{-ζ²} is either below e^{-32} (|Re ζ| > |Im ζ|)
+        # or absent from Z (upper half plane, Stokes sector).
+        imag(ζ) < 0 && (s += 2im * sqrt(π) * ζ * exp(-ζ^2))
         return s
     end
     return 1 + ζ * plasma_Z(ζ)
