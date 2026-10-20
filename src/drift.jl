@@ -63,8 +63,14 @@ function linear_moments(ω, q)
     return I0, (ω / q)^2 * I0 - ω / q^2
 end
 
-"Gauss–Laguerre nodes and weights for ∫₀^∞ e^{-μ} f(μ) dμ (Golub–Welsch)."
-function gauss_laguerre(n::Integer)
+"""
+Gauss–Laguerre nodes and weights for ∫₀^∞ e^{-μ} f(μ) dμ (Golub–Welsch). Cached per `n` (responses are
+rebuilt at every radius of a profile); the returned vectors are shared, do not mutate them.
+"""
+gauss_laguerre(n::Integer) = lock(() -> get!(() -> _gauss_laguerre(n), GAUSS_LAGUERRE, Int(n)), GAUSS_LAGUERRE_LOCK)
+const GAUSS_LAGUERRE = Dict{Int,Tuple{Vector{Float64},Vector{Float64}}}()
+const GAUSS_LAGUERRE_LOCK = ReentrantLock()
+function _gauss_laguerre(n)
     J = SymTridiagonal([2k + 1.0 for k in 0:(n - 1)], [Float64(k) for k in 1:(n - 1)])
     E = eigen(J)
     return E.values, E.vectors[1, :] .^ 2
