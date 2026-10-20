@@ -54,22 +54,56 @@ end
 """
     susceptibility(s, ω, k) -> χ̃_s (3×3)
 
-Susceptibility of species `s` in units of ω_pi²/Ω_i², b̂ = ẑ, any k⊥ = (kx, ky):
-χ̃_s = (q² N/m)/ω² · R M Rᵀ, with M = `susceptibility(s.response, ω/|Ω_s|, k)` in the species' units
-in the frame where k⊥ lies along x, and R the rotation about ẑ back to (kx, ky). Negative charge
-(opposite gyration) is the mirror image y → -y in that frame. Homogeneous background only: gradients throw.
+Susceptibility of species `s` in units of ω_pi²/Ω_i² (current j = -iω χ̃ E), b̂ = ẑ, any k⊥ = (kx, ky):
+χ̃_s = (q² N/m)/ω² · R M Rᵀ + i k gᵀ/k², with M = `susceptibility(s.response, ω/|Ω_s|, k, ωn, ωT)` in the species'
+units in the frame where k⊥ lies along x (gradient drive ωn, ωT along y of the lab), and R the rotation about ẑ back
+to (kx, ky). Negative charge (opposite gyration) is the mirror image y → -y in that frame.
+The second term only acts on the longitudinal row: it is the charge g·E that the local current misses, the
+divergence of the current across the density gradient (`charge_vector`), so that the longitudinal row is the full
+charge, -i k·χ̃ E + g·E = ρ (the electrostatic `charge_response`).
 """
 function susceptibility(s::Species, ω, k::Wavevector)
-    (s.κn == 0 && s.κT == 0) ||
-        throw(ArgumentError("electromagnetic responses have no gradient drive; species has κn = $(s.κn), κT = $(s.κT)"))
     Ω, ks = _species_units(s, k)
-    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz))
+    ωn = (s.T / s.q) * k.ky * s.κn / Ω
+    ωT = (s.T / s.q) * k.ky * s.κT / Ω
+    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz), ωn, ωT)
     fy = s.q < 0 ? -1 : 1                                         # mirror y -> -y
     F = SVector(1, fy, 1)
     kp = kperp(k)
     c, sn = kp == 0 ? (1.0, 0.0) : (k.kx / kp, k.ky / kp)
     R = @SMatrix [c -sn 0; sn c 0; 0 0 1]
-    return (s.q^2 * s.N / s.m) / ω^2 * (R * (F .* M .* transpose(F)) * transpose(R))
+    return (s.q^2 * s.N / s.m) / ω^2 * (R * (F .* M .* transpose(F)) * transpose(R)) + _charge_term(s, ω, k)
+end
+
+function _charge_term(s::Species, ω, k::Wavevector)
+    s.κn == 0 && return zero(SMatrix{3,3,complex(typeof(float(ω)))})
+    kv = SVector(k.kx, k.ky, k.kz)
+    return im * kv * transpose(charge_vector(s, ω, k)) / (kv' * kv)
+end
+
+"""
+    charge_vector(s, ω, k) -> g
+
+Charge g·E that the local current j misses (lab frame): ∇·j = ik·j + κn j_x for a current ∝ N(x), so
+ρ = (k·j - iκn j_x)/ω. Kinetic and Boltzmann species carry the E×B current j_x = qN E_y (the local kinetic theory);
+a cold fluid the full j_x = qN v_x, v_x = (q/m)(-iω E_x + Ω E_y)/(Ω² - ω²).
+"""
+charge_vector(s::Species, ω, k::Wavevector) = SVector(0, -im * s.q * s.N * s.κn / ω, 0)
+function charge_vector(s::Species{Cold}, ω, k::Wavevector)
+    Ω = cyclotron_frequency(s)
+    return -im * s.q * s.N * s.κn / ω * (s.q / s.m) / (Ω^2 - ω^2) * SVector(-im * ω, Ω, 0)
+end
+
+# Boltzmann species, electromagnetic: isothermal massless fluid along B, δn = -qNψ/T with E∥ = -ik∥ψ, carrying the
+# E×B current qN(E_y, -E_x); j∥ from continuity, k·j - iκn j_x = ωρ. No δB∥ coupling and no diamagnetic current
+# (use `DriftKinetic` for those). Lab frame, j = -iω χ̃ E.
+function susceptibility(s::Species{Boltzmann}, ω, k::Wavevector)
+    k.kz == 0 && throw(ArgumentError("Boltzmann species need k∥ ≠ 0 electromagnetically (δn = -qNψ/T, E∥ = -ik∥ψ)"))
+    qN = s.q * s.N
+    χ = @SMatrix [0 im*qN/ω 0;
+                  -im*qN/ω 0 0;
+                  im*qN*k.ky/(ω*k.kz) -qN*(s.κn + im*k.kx)/(ω*k.kz) s.q^2*s.N/(s.T*k.kz^2)]
+    return χ + _charge_term(s, ω, k)
 end
 
 "Charge response q_s δn_s/φ in units e N_i/T_i: (q² N/T)(W − 1), minus the polarisation w N m k⊥² of a `DriftKinetic` species."
@@ -78,7 +112,8 @@ charge_response(s::Species, ω, k::Wavevector) =
 charge_response(s::Species{DriftKinetic}, ω, k::Wavevector) =
     s.q^2 * s.N / s.T * (nonadiabatic_response(s, ω, k) - 1) - polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
 charge_response(s::Species{Cold}, ω, k::Wavevector) =
-    -polarization_weight(s, ω) * (s.N * s.m * kperp(k)^2 + s.q * s.N * s.κn * k.ky / ω) + s.q^2 * s.N / s.m * k.kz^2 / ω^2
+    -polarization_weight(s, ω) * (s.N * s.m * (kperp(k)^2 - im * s.κn * k.kx) + s.q * s.N * s.κn * k.ky / ω) +
+    s.q^2 * s.N / s.m * k.kz^2 / ω^2
 
 # Weight w of the polarisation charge -w N m k⊥² (B = 1): 1 or 0 (`DriftKinetic`), Ω²/(Ω² - ω²) for a cold fluid.
 polarization_weight(s::Species{DriftKinetic}, ω) = s.response.polarization ? 1.0 : 0.0

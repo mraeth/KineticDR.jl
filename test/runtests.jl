@@ -343,8 +343,8 @@ end
 
     # (12) guards
     @test_throws ArgumentError nonadiabatic_response(Species(response = Cold()), ω, k)          # fluid: no Gordeyev sum
-    @test_throws ArgumentError dispersion(Model((Species(), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), ω, k)
-    @test_throws ArgumentError dispersion(Model((Species(κn = 0.1), Species(q = -1, m = μ)), Darwin(beta = β)), ω, k)
+    @test_throws ArgumentError dispersion(Model((Species(), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), ω,
+                                          Wavevector(ky = 0.5, kz = 0.0))                     # Boltzmann needs k∥ ≠ 0
 end
 
 @testset "radial operator" begin
@@ -660,4 +660,47 @@ end
     # one response at every x
     mix = x -> Species(response = x < 2 ? Cold() : DriftKinetic())
     @test_throws ArgumentError operator(g, Model((mix,), Quasineutrality()), k, ω)
+end
+
+@testset "electromagnetic: gradients, gyrokinetic and Boltzmann" begin
+    # the longitudinal row is the full charge: -k·χ̃·k = charge_response, every response, both signs, with gradients
+    ω, k = 0.6 + 0.08im, Wavevector(0.3, 0.7, 0.2)
+    kv = [k.kx, k.ky, k.kz]
+    for r in (GordeyevSeries(), GordeyevIntegral(), Gyrokinetic(), DriftKinetic(), DriftKinetic(polarization = true), Cold(), Boltzmann()),
+        q in (1, -1)
+        s = Species(; q, m = q > 0 ? 1.0 : 0.05, T = 0.8, N = 0.9, κn = 0.3, κT = -0.4, response = r)
+        @test -(transpose(kv) * susceptibility(s, ω, k) * kv) ≈ charge_response(s, ω, k) rtol = 1e-13
+    end
+    # T∂_T M = ½ d/ds M(ω, s k) (central difference, h² ~ 1e-8)
+    kf = Wavevector(0.9, 0.0, 0.3)
+    for r in (GordeyevSeries(), Gyrokinetic(), DriftKinetic())
+        M, MT = KD.tensor_T(r, ω, kf)
+        Ms(s) = first(KD.tensor_T(r, ω, Wavevector(s * kf.kx, 0.0, s * kf.kz)))
+        @test maximum(abs, MT - (Ms(1 + 1e-4) - Ms(1 - 1e-4)) / 4e-4) < 1e-7 * maximum(abs, MT)
+    end
+    # series with gradient drive against the orbit integral, whose T-derivative is taken inside the integrand
+    for kz in (0.3, -0.3)
+        a = susceptibility(GordeyevSeries(), ω, Wavevector(0.9, 0.0, kz), 0.2, -0.3)
+        @test maximum(abs, a - susceptibility(GordeyevIntegral(), ω, Wavevector(0.9, 0.0, kz), 0.2, -0.3)) < 1e-12 * maximum(abs, a)
+    end
+    # gyrokinetic = full orbit to O(ω²) for ω ~ k∥v_t → 0
+    gkerr(w) = (kk = Wavevector(0.9, 0.0, w); a = susceptibility(GordeyevSeries(), w * (1 + 0.3im), kk);
+                maximum(abs, a - susceptibility(Gyrokinetic(), w * (1 + 0.3im), kk)) / maximum(abs, a))
+    @test gkerr(1e-3) < 2e-6
+    @test gkerr(1e-3) < 2e-4 * gkerr(1e-1)
+    # Boltzmann = drift-kinetic electrons as ζ = ω/(√2 k∥v_t) → 0 (parallel element; E×B exactly)
+    bz(m) = (kk = Wavevector(0.0, 0.5, 0.2); w = 0.05 + 0.01im;
+             (susceptibility(Species(q = -1, m = m, response = Boltzmann()), w, kk), susceptibility(Species(q = -1, m = m, response = DriftKinetic()), w, kk)))
+    (a, b), (c, d) = bz(1e-4), bz(1e-6)
+    @test abs(c[3, 3] - d[3, 3]) < 0.12 * abs(a[3, 3] - b[3, 3])
+    @test a[1, 2] ≈ b[1, 2] rtol = 1e-13
+    # β → 0: the electromagnetic root of an ITG case (gradients) tends to the electrostatic one, linearly in β
+    ku = Wavevector(ky = 0.5, kz = 0.1)
+    for ele in (Species(q = -1, κn = -0.1, response = Boltzmann()),
+                Species(q = -1, m = 1 / 1836, κn = -0.1, κT = -0.4, response = DriftKinetic()))
+        ion = Species(κn = -0.1, κT = -0.4, response = Gyrokinetic())
+        es, ok = find_root(Model((ion, ele), Quasineutrality()), ku, -0.1 + 0.05im)
+        d(β) = abs(first(find_root(Model((ion, ele), Darwin(beta = β)), ku, es; δ = 1e-4)) - es)
+        @test ok && d(1e-5) < 1e-6 && d(1e-7) < 0.02 * d(1e-5)
+    end
 end

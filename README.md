@@ -55,9 +55,9 @@ Which response works with which model:
 |---|---|:-:|:-:|:-:|
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | (not planned) |
-| `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG) | ✓ | | ✓ |
-| `Boltzmann()` | adiabatic, δn = −qNφ/T | ✓ | | ✓ |
-| `Cold()` | cold fluid (Stix S, D, P; electrostatic with E×B gradient drive) | ✓ | ✓ | ✓ |
+| `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω | ✓ | ✓ | ✓ |
+| `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: δn = −qNψ/T (E∥ = −ik∥ψ) with the E×B current | ✓ | ✓ (k∥ ≠ 0) | ✓ |
+| `Cold()` | cold fluid (Stix S, D, P), with the cold drift across the density gradient | ✓ | ✓ | ✓ |
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
 
 Field equations: `Quasineutrality()` and `Poisson(lambda2 = (λ_D/ρ_i)²)` are electrostatic, local and
@@ -116,8 +116,17 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
 - `dispersion` is a scalar of arbitrary size: only its zeros mean anything. All the solvers above apply
   to it.
 - Discard roots at ω ≈ 0. det(ω²𝒟) vanishes there for k∥ = 0, and with `DriftKinetic` electrons also for k∥ ≠ 0.
+- **Gradients.** The drive enters the current as in the electrostatic model: the Maxwellian is weighted by
+  1 − ω_*(v)/ω, so M → (1 − ωn/ω)M − (ωT/ω)(M + T∂_T M) (`susceptibility(r, ω, k, ωn, ωT)`). The local current
+  misses the divergence of the current across the density gradient, κn j_x, so each species adds that charge
+  (`charge_vector`) to the longitudinal row only. That row is then the full charge: its electrostatic limit
+  −k·χ·k is `charge_response` exactly, and the EM roots tend to the electrostatic ones as β → 0.
+- **`Gyrokinetic` and `Boltzmann`.** `Gyrokinetic` is the hot tensor's p = 0 term plus the polarisation and E×B
+  currents of p ≠ 0 to lowest order in ω/Ω. `Boltzmann` is an isothermal massless fluid along B (δn = −qNψ/T) that
+  carries the E×B current but no δB∥ coupling or diamagnetic current; use `DriftKinetic` for those. The
+  polarisation of `DriftKinetic(polarization = true)` is not weighted by the gradient drive, as in its
+  electrostatic −N m k⊥².
 - Limits:
-  - No gradients: a species with κ ≠ 0 throws.
   - Real k only.
   - For a kinetic species with 0 < k∥ ≪ ω, Z(ζ) overflows below the real axis; use k∥ = 0 exactly for
     perpendicular propagation.
@@ -220,8 +229,10 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
 - A new **response** is a subtype of `AbstractResponse` with any of:
   - `gordeyev(r, ω, k) -> (S, S_T)` for the electrostatic path: the Gordeyev sum and its temperature
     derivative, in the species' own units (ω in |Ω_s|, k in 1/ρ_s);
-  - `susceptibility(r, ω, k)` for the electromagnetic path: the 3×3 tensor M in the frame where k⊥ ∥ x̂.
-  The `Species` methods add the gradient drive, the units, the electron sign and the rotation to (kx, ky).
+  - `susceptibility(r, ω, k)` for the electromagnetic path: the 3×3 tensor M in the frame where k⊥ ∥ x̂, and
+    `KineticDR.tensor_T(r, ω, k) -> (M, T∂_T M)` for its gradient drive.
+  The `Species` methods add the gradient drive, the units, the electron sign, the rotation to (kx, ky) and the
+  gradient charge.
 - A new electrostatic **field equation** is a subtype of `AbstractFieldEquation` with
   `residual(field, ρs, k)`, where ρs is the tuple of the species' q_s δn_s/φ.
 
@@ -229,7 +240,6 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
 
 - Magnetic drift and toroidal terms. `GyrokineticDrift`, magnetic shear and B(x) in the radial problem
   are on the branch `radial-geometry`.
-- Gradients in the electromagnetic tensor.
 - Electromagnetic fields in the radial problem.
 - Complex k.
 
@@ -240,7 +250,7 @@ src/KineticDR.jl   module, exports
 src/special.jl     plasma Z function, Γ_p = I_p e^{-x}
 src/types.jl       Wavevector, abstract types
 src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral, Cold, DriftKinetic
-src/species.jl     Species, Model, charge_response, susceptibility, with_gradients
+src/species.jl     Species, Model, charge_response, susceptibility, charge_vector, with_gradients
 src/fields.jl      Quasineutrality, Poisson, Darwin, Maxwell, dispersion, dispersion_matrix
 src/solve.jl       root finders and gradient scans
 src/radial.jl      profile species, radial grid and operator, eigenmode solvers
