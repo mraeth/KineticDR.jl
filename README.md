@@ -169,12 +169,16 @@ r = find_eigenmode(g, m, k; re = 1.0:0.02:1.1, imag = 0.001:0.002:0.011, starts 
   - A `Boltzmann` species' N is taken at the node.
 - **Exact integrals.** The v∥ and μ integrals are exact (Z functions and Weber's integral); only x and, for
   full-orbit species, the harmonics are truncated. Converge in N and `pmax` (the IBW example: N = 64 → 96 changes
-  ω by 1e-14, `pmax` = 16 → 24 by 1.4e-5). The workspace holds 2N³(`pmax` + 1) floats per kinetic species
-  (270 MB at N = 256, `pmax` = 0; 840 MB at N = 128, `pmax` = 24).
-- **Full orbit.** `GordeyevSeries` needs a fixed `pmax` and `bc = :periodic`: harmonic p carries the orbit phase
-  e^{−ipθ_k}, θ_k = atan2(k_x, k_y), which leaves a standing-wave basis. With guiding-centre profiles the operator
-  is exact up to the cut-off: its symbol for an exponential density is `exponential_dispersion(ω, kx′, ky, kz; κn)`,
-  the exact local dispersion relation of that profile.
+  ω by 5e-14, `pmax` = 16 → 24 by 1.4e-5). The workspace holds 2N²(`pmax` + 1)·n_ρ floats per kinetic species,
+  n_ρ the number of distinct gyroradii on the grid: 1 for uniform T, N otherwise (840 MB at N = 128, `pmax` = 24);
+  above 4 GB it warns.
+- **Full orbit.** `GordeyevSeries` needs a fixed `pmax ≥ 0` and `bc = :periodic` with periodic profiles (checked at
+  the walls): harmonic p carries the orbit phase e^{−i sgn(q) pθ_k}, θ_k = atan2(k_x, k_y), which leaves a
+  standing-wave basis. With guiding-centre profiles the operator is exact up to the cut-off: its symbol for an
+  exponential density is `exponential_dispersion(ω, kx′, ky, kz; κn, T, Te)`, the exact local dispersion relation
+  of that profile (ions). Negative charges rest on the mirror symmetry y → −y (charge −q at k_y = charge q at
+  −k_y), which the tests check, plus the uniform-profile limit; there is no exact non-uniform electron reference.
+  `Gyrokinetic` and `GordeyevSeries(pmax = 0)` are the same kernel.
 - **Walls.** `:dirichlet` puts φ = 0 on both walls (the kinetic wall of the bslLD runs); `:mirror` makes
   φ even about both walls. A mode localised away from the walls must give the same ω with both.
 - **Finding modes.**

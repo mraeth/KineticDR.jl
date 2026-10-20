@@ -523,6 +523,29 @@ end
     ku = Wavevector(ky = 5.0, kz = 0.025)
     loc = first(filter(z -> abs(real(z) - 1) < 0.4, find_modes(mu, ku; re = 0.7:0.1:1.3, imag = (0.002, 0.01), imin = 0.0)))
     @test abs(first(KD.smallest(operator(radial_grid(-20, 20, 24; bc = :periodic), mu, ku, loc)))) < 1e-9
+    r = eigenmode(radial_grid(-20, 20, 24; bc = :periodic), mu, ku, loc * (1 + 1e-4))       # end to end
+    @test r.converged
+    @test r.ω ≈ loc rtol = 1e-9
+    # the assembled matrix carries the symbol's orbit phase: κn(x) = ε cos(Kx) (uniform N, T) couples k' to k' ± K
+    # with entry -(ε/2) Σ_p e^{iσp(θ_k - θ_k')} W0_p(k⊥ρ, k⊥'ρ) ∂W_p/∂κn, the sum of the symbol test below
+    for ky in (1.3, -1.3), q in (1, -1)
+        ε, L, Tc = 0.3, 10.0, 1.4
+        K = 2 * 2π / L
+        sp = x -> Species(; q, T = Tc, κn = ε * cos(K * x), response = GordeyevSeries(pmax = 3))
+        m = Model((sp, Species(q = -q, response = Boltzmann())), Quasineutrality())
+        g, k, ω = radial_grid(0, L, 24; bc = :periodic), Wavevector(; ky, kz = 0.1), 1.05 + 0.02im
+        Ad = g.Cinv * operator(g, m, k, ω) * g.C
+        s0, s1 = Species(; q, T = Tc), Species(; q, T = Tc, κn = 1.0)
+        ρ = sqrt(Tc) / abs(q)
+        kp(k) = hypot(k, ky)
+        coupling(kk, k′) = -(ε / 2) / Tc * sum(cis(sign(q) * p * (atan(kk, ky) - atan(k′, ky))) * KD.weber(p, kp(kk) * ρ, kp(k′) * ρ)[1] *
+                                               (KD.vpar_response(k, s1, ω, 0.0, p) - KD.vpar_response(k, s0, ω, 0.0, p)) for p in -3:3)
+        l′ = 12                                          # k_l′ = -2π/L·1; k_l′ ± K inside the band, away from Nyquist
+        for dl in (2, -2)
+            @test Ad[l′ + dl, l′] ≈ coupling(g.k[l′ + dl], g.k[l′]) rtol = 1e-12
+        end
+        @test abs(Ad[l′ + 1, l′]) < 1e-14 * abs(Ad[l′, l′])     # nothing else
+    end
     # non-uniform periodic profiles: the closed-form μ integral is the μ quadrature (assembly with the orbit phase)
     T(x) = 1 + 0.3 * sin(2π * x / 10)
     n(x) = 1 + 0.2 * cos(2π * x / 10)
@@ -558,19 +581,32 @@ end
     @test d ≈ -1e-4 * im * ω * ky / 2 * (G0(ω - 1) - G0(ω + 1)) rtol = 1e-3
     # the radial operator's symbol on e^{i k_x x}, k_x = kx′ + iκ/2, for n = e^{κx} (guiding centre, exact adiabatic
     # terms) is the exact DR; k_y of both signs
-    for ky in (2.0, -2.0)
-        ion = species_profile(; N = x -> exp(κ * x), response = GordeyevSeries(pmax = 40))
+    for (ky, Ti, Te) in ((2.0, 1.0, 1.0), (-2.0, 1.0, 1.0), (2.0, 1.7, 0.8), (-1.5, 0.6, 1.3))
+        ion = species_profile(; N = x -> exp(κ * x), T = x -> Ti, response = GordeyevSeries(pmax = 40))
         k, s0 = Wavevector(; ky, kz), ion(0.0)
         kx = kxp + im * κ / 2
         q = kx - im * κ                                  # output wavenumber: n(x) e^{i k_x x}
         kp(k) = sqrt(k^2 + ky^2)
         eθ(k) = (ky + im * k) / kp(k)                    # e^{iθ_k}, θ_k = atan2(k_x, k_y), continued to complex k_x
-        σ = sum(KD.vpar_response(k, s0, ω, 0.0, p) * KD.weber(p, kp(q), kp(kx))[1] * (eθ(q) / eθ(kx))^p for p in -40:40)
+        ρ = sqrt(Ti)
+        σ = sum(KD.vpar_response(k, s0, ω, 0.0, p) * KD.weber(p, kp(q) * ρ, kp(kx) * ρ)[1] * (eθ(q) / eθ(kx))^p for p in -40:40) / Ti
         np = particle_density(ion)(0.0)
-        @test (np + KD.adiabatic_term(ion, 0.0) - σ) / np ≈ exponential_dispersion(ω, kxp, ky, kz; κn = κ) rtol = 1e-12
+        @test (np / Te + KD.adiabatic_term(ion, 0.0) - σ) / np ≈ exponential_dispersion(ω, kxp, ky, kz; κn = κ, T = Ti, Te) rtol = 1e-12
     end
     # interface
     @test_throws ArgumentError operator(g, Model((Species(), adiabatic_electrons()), Quasineutrality()), Wavevector(ky = 1.0), 0.1 + 0.01im)
     @test_throws ArgumentError operator(radial_grid(0, 10.0, 24), mu, ku, 1.0 + 0.01im)                 # p ≠ 0 needs :periodic
     @test_throws ArgumentError radial_grid(0, 10.0, 25; bc = :periodic)
+    @test_throws ArgumentError operator(g, Model((Species(response = GordeyevSeries(pmax = -1)), adiabatic_electrons()), Quasineutrality()),
+                                        Wavevector(ky = 1.0, kz = 0.1), 0.1 + 0.01im)                       # pmax < 0
+    nonper = species_profile(; N = x -> 1 + 0.05x, response = GordeyevSeries(pmax = 2))
+    @test_throws ArgumentError operator(g, Model((nonper, adiabatic_electrons()), Quasineutrality()), Wavevector(ky = 1.0, kz = 0.1), 0.1 + 0.01im)
+    @test_throws ArgumentError eigenmode(g, mu, Wavevector(ky = 5.0), 1.0 + 0.0im)                          # pole ω = |Ω| at k_z = 0
+    # Gyrokinetic and GordeyevSeries(pmax = 0) are the same kernel, also mixed along x
+    mix = x -> Species(κT = -0.3, response = x < 5 ? Gyrokinetic() : GordeyevSeries(pmax = 0))
+    @test operator(g, Model((mix, adiabatic_electrons()), Quasineutrality()), Wavevector(ky = 0.5, kz = 0.01), 0.02 + 0.01im) ≈
+          operator(g, Model((Species(κT = -0.3, response = Gyrokinetic()), adiabatic_electrons()), Quasineutrality()),
+                   Wavevector(ky = 0.5, kz = 0.01), 0.02 + 0.01im) rtol = 1e-14
+    # uniform T: one table per harmonic, shared by all nodes
+    @test size(KD.WeberOperator(g, Wavevector(ky = 1.0), [Species() for _ in g.x], 2).W0[1], 1) == 1
 end

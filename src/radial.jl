@@ -81,7 +81,7 @@ particle_density(sp) = x -> gc_average(s -> s.N, sp, x)
 
 Exact local dispersion function (the reference of the radial operator with profiles) of full-orbit ions with an exponential guiding-centre density
 n ∝ e^{κn X} (κn = d ln n/dX, any size) and uniform T, Boltzmann electrons with the ion particle
-density. The equilibrium is translation invariant, so an eigenmode is e^{κn x/2} e^{i kx′ x} with real kx′
+density. The equilibrium is translation invariant, so an eigenmode is e^{i k_x x} = e^{-κn x/2} e^{i kx′ x} with real kx′
 (the shift k_x = kx′ + iκn/2 makes D even in kx′). Same normalisation and sign as
 `dispersion` of full-orbit ions with Boltzmann electrons of density n_p, i.e. (δn_e - δn_i)/(n_p φ), to which it reduces
 for κn → 0. At O(κn),
@@ -125,7 +125,9 @@ along z.
 - `bc = :mirror`: unknowns at the cell centres x_j + δ/2 (N of them), cosine basis, even about both
   walls (bslLD's `Mirror()` halo). Admits wall-localised modes the simulation does not have.
 - `bc = :periodic`: unknowns at the N nodes (N even), plane waves e^{ik(x - a)}, k = 2πm/L, m = -N/2 … N/2 - 1.
-  Needs periodic profiles. The only basis that carries the Larmor harmonics p ≠ 0 (`GordeyevSeries`).
+  Needs periodic profiles (checked: N, T, κn, κT equal at a and b). The only basis that carries the Larmor
+  harmonics p ≠ 0 (`GordeyevSeries`). The Nyquist mode m = -N/2 is the same on the nodes as m = +N/2 but carries
+  the orbit phase of -N/2 only; its weight vanishes with N (converge in N).
 Eigenvectors are returned as `ScalarField`s with one value per grid node (zero at the wall node for Dirichlet; cell
 centres for mirror; the nodes for periodic).
 """
@@ -207,42 +209,53 @@ end
 harmonics(::Gyrokinetic) = 0
 function harmonics(r::GordeyevSeries)
     r.pmax === nothing && throw(ArgumentError("radial problem: GordeyevSeries needs a fixed cut-off, GordeyevSeries(pmax = P)"))
+    r.pmax >= 0 || throw(ArgumentError("GordeyevSeries: pmax must be ≥ 0, got $(r.pmax)"))
     return r.pmax
 end
 
 # Kinetic species: the μ integral in closed form. With G_p[j, l] = C[j, l] e^{-iσpθ_l} J_p(k⊥_l ρ_jμ), σ = sgn(q),
 #   Σ_p ∫dμ e^{-μ} G_p† diag(w (r0_p + r1_p μ)) G_p = M,
-#   M[l, l'] = Σ_p e^{iσp(θ_l - θ_l')} Σ_j conj(C[j, l]) w_j (r0_pj W0_|p|[j, l, l'] + r1_pj W1_|p|[j, l, l']) C[j, l'],
-# W0, W1 = weber(p, k⊥_l ρ_j, k⊥_l' ρ_j), ρ_j = √(T m)/|q| at node j: even in p, ω-independent tables per |p|.
+#   M[l, l'] = Σ_p e^{iσp(θ_l - θ_l')} Σ_j conj(C[j, l]) w_j (r0_pj W0_|p|[ρ_j, l, l'] + r1_pj W1_|p|[ρ_j, l, l']) C[j, l'],
+# W0, W1 = weber(p, k⊥_l ρ_j, k⊥_l' ρ_j), ρ_j = √(T m)/|q| at node j: even in p, ω-independent, one table per
+# |p| and distinct ρ_j (a single one for uniform T).
 struct WeberOperator{S}
     ss::Vector{S}
     P::Int
     σ::Int
-    W0::Vector{Array{Float64,3}}   # [j, l, l'], index |p| + 1
+    iρ::Vector{Int}                # node j -> index of its gyroradius in the tables
+    W0::Vector{Array{Float64,3}}   # [iρ, l, l'], index |p| + 1
     W1::Vector{Array{Float64,3}}
     θ::Vector{Float64}
-    u0::Matrix{ComplexF64}
+    u0::Matrix{ComplexF64}         # buffers for +p and -p
     u1::Matrix{ComplexF64}
+    v0::Matrix{ComplexF64}
+    v1::Matrix{ComplexF64}
     M::Matrix{ComplexF64}
 end
+
+# Warn above this size of the Weber tables of one species (bytes)
+const WEBER_TABLE_WARN = 4e9
 
 function WeberOperator(g::RadialGrid, k::Wavevector, ss, P)
     N = length(g.x)
     (all(s -> s.q == ss[1].q && s.m == ss[1].m, ss)) ||
         throw(ArgumentError("radial problem: a species' charge and mass must not depend on x"))
+    ρs = [sqrt(s.T * s.m) / abs(s.q) for s in ss]
+    ρu = unique(ρs)
+    iρ = [findfirst(==(ρ), ρu) for ρ in ρs]
+    bytes = 16.0 * (P + 1) * length(ρu) * N^2
+    bytes > WEBER_TABLE_WARN && @warn "radial problem: Weber tables of $(round(bytes / 1e9, digits = 1)) GB for one species " *
+                                       "(N = $N, pmax = $P, $(length(ρu)) distinct gyroradii)"
     kp = [hypot(q, k.ky) for q in g.k]
-    W0 = [zeros(N, N, N) for _ in 0:P]
-    W1 = [zeros(N, N, N) for _ in 0:P]
-    for p in 0:P, j in 1:N
-        ρ = sqrt(ss[j].T * ss[j].m) / abs(ss[j].q)
-        for l in 1:N, l2 in l:N
-            W0[p + 1][j, l, l2], W1[p + 1][j, l, l2] = weber(p, kp[l] * ρ, kp[l2] * ρ)
-            W0[p + 1][j, l2, l], W1[p + 1][j, l2, l] = W0[p + 1][j, l, l2], W1[p + 1][j, l, l2]
-        end
+    W0 = [zeros(length(ρu), N, N) for _ in 0:P]
+    W1 = [zeros(length(ρu), N, N) for _ in 0:P]
+    for p in 0:P, (u, ρ) in enumerate(ρu), l in 1:N, l2 in l:N
+        W0[p + 1][u, l, l2], W1[p + 1][u, l, l2] = weber(p, kp[l] * ρ, kp[l2] * ρ)
+        W0[p + 1][u, l2, l], W1[p + 1][u, l2, l] = W0[p + 1][u, l, l2], W1[p + 1][u, l, l2]
     end
     θ = [atan(q, k.ky) for q in g.k]
-    return WeberOperator(ss, P, Int(sign(ss[1].q)), W0, W1, θ, zeros(ComplexF64, N, N), zeros(ComplexF64, N, N),
-                         zeros(ComplexF64, N, N))
+    z() = zeros(ComplexF64, N, N)
+    return WeberOperator(ss, P, Int(sign(ss[1].q)), iρ, W0, W1, θ, z(), z(), z(), z(), z())
 end
 
 struct RadialWorkspace{G,M}
@@ -268,17 +281,29 @@ function RadialWorkspace(g::RadialGrid, m::Model, k::Wavevector)
     kinetic = WeberOperator[]
     for sp in m.species
         ss = [species_at(sp, x) for x in g.x]
-        r1 = ss[1].response
-        (r1 isa Union{Boltzmann,Gyrokinetic,GordeyevSeries} && all(s -> s.response == r1, ss)) || throw(ArgumentError(
-            "radial kernels: the same Gyrokinetic, GordeyevSeries(pmax) or Boltzmann at every x, got " *
-            "$(unique(nameof.(typeof.(getfield.(ss, :response)))))"))
+        kinds = unique(s.response isa Boltzmann ? -1 : s.response isa Union{Gyrokinetic,GordeyevSeries} ? harmonics(s.response) : -2
+                       for s in ss)
+        (length(kinds) == 1 && kinds[1] != -2) || throw(ArgumentError(
+            "radial kernels: Boltzmann, or Gyrokinetic/GordeyevSeries with one harmonic cut-off, at every x; got " *
+            "$(unique(string.(getfield.(ss, :response))))"))
+        g.bc === :periodic && check_periodic(g, sp)
         diag .+= [adiabatic_term(sp, x) for x in g.x]
-        r1 isa Boltzmann && continue
-        P = harmonics(r1)
+        kinds[1] == -1 && continue
+        P = kinds[1]
         P > 0 && g.bc !== :periodic && throw(ArgumentError("Larmor harmonics (pmax = $P > 0) need bc = :periodic"))
         push!(kinetic, WeberOperator(g, k, ss, P))
     end
     return RadialWorkspace(g, m, k, kinetic, diag, fieldop)
+end
+
+# A periodic basis needs periodic profiles: the species at both walls must agree (to 1e-6: κ of a numerically
+# integrated profile, e.g. `particle_density`, carries finite-difference noise ~1e-8).
+function check_periodic(g::RadialGrid, sp)
+    ax = g.grid.xaxes[1]
+    a, b = first(ax), first(ax) + length(ax) * step(ax)
+    sa, sb = species_at(sp, a), species_at(sp, b)
+    all(isapprox(getfield(sa, f), getfield(sb, f); rtol = 1e-6, atol = 1e-6) for f in (:N, :T, :κn, :κT)) ||
+        throw(ArgumentError("bc = :periodic needs periodic profiles: the species differs at x = $a and x = $b"))
 end
 
 """
@@ -300,28 +325,41 @@ function operator(g::RadialGrid, m::Model, k::Wavevector, ω::Number, ws = Radia
     return A
 end
 
-# Σ_p ∫dμ e^{-μ} J_pμ† diag(w W_pμ) J_pμ = Cinv' M Cinv (see `WeberOperator`)
+# Σ_p ∫dμ e^{-μ} J_pμ† diag(w W_pμ) J_pμ = Cinv' M Cinv (see `WeberOperator`); p and -p share the tables
+# and are summed in one pass.
 function kinetic_operator!(K::WeberOperator, g::RadialGrid, k::Wavevector, ω)
     N = length(g.x)
     C = g.C
     fill!(K.M, 0)
-    for p in -K.P:K.P
-        W0, W1 = K.W0[abs(p) + 1], K.W1[abs(p) + 1]
+    function fill_u!(u0, u1, p)
         for (j, s) in enumerate(K.ss)
             w = s.q^2 * s.N / s.T
             r0 = vpar_response(k, s, ω, 0.0, p)
             r1 = vpar_response(k, s, ω, 1.0, p) - r0
             for l in 1:N
-                K.u0[j, l] = conj(C[j, l]) * w * r0
-                K.u1[j, l] = conj(C[j, l]) * w * r1
+                u0[j, l] = conj(C[j, l]) * w * r0
+                u1[j, l] = conj(C[j, l]) * w * r1
             end
         end
+    end
+    for p in 0:K.P
+        W0, W1, iρ = K.W0[p + 1], K.W1[p + 1], K.iρ
+        fill_u!(K.u0, K.u1, p)
+        p > 0 && fill_u!(K.v0, K.v1, -p)
         @inbounds for l2 in 1:N, l in 1:N
-            acc = zero(ComplexF64)
-            @simd for j in 1:N
-                acc += (K.u0[j, l] * W0[j, l, l2] + K.u1[j, l] * W1[j, l, l2]) * C[j, l2]
+            a₊ = zero(ComplexF64)
+            a₋ = zero(ComplexF64)
+            for j in 1:N
+                w0, w1, c = W0[iρ[j], l, l2], W1[iρ[j], l, l2], C[j, l2]
+                a₊ += (K.u0[j, l] * w0 + K.u1[j, l] * w1) * c
+                p > 0 && (a₋ += (K.v0[j, l] * w0 + K.v1[j, l] * w1) * c)
             end
-            K.M[l, l2] += p == 0 ? acc : cis(K.σ * p * (K.θ[l] - K.θ[l2])) * acc
+            if p == 0
+                K.M[l, l2] += a₊
+            else
+                e = cis(K.σ * p * (K.θ[l] - K.θ[l2]))
+                K.M[l, l2] += e * a₊ + conj(e) * a₋
+            end
         end
     end
     return g.Cinv' * K.M * g.Cinv
@@ -351,7 +389,8 @@ max |φ| = 1 and real at the maximum.
 function eigenmode(g::RadialGrid, m::Model, k::Wavevector, ω0::Number; tol = 1e-10, ltol = 1e-8, maxit = 60,
                    ws = RadialWorkspace(g, m, k))
     isfinite(ω0) || throw(ArgumentError("eigenmode: the guess ω0 = $ω0 is not finite"))
-    (ω0 == 0 && k.kz == 0) && throw(ArgumentError("eigenmode: ω0 = 0 with k_z = 0 (the response has a pole at ω = 0)"))
+    k.kz == 0 && any(K -> any(p -> ω0 == p * abs(cyclotron_frequency(K.ss[1])), -K.P:K.P), ws.kinetic) &&
+        throw(ArgumentError("eigenmode: ω0 = $ω0 is a pole of the response at k_z = 0 (ω = p|Ω_s|)"))
     λ(ω) = first(smallest(operator(g, m, k, ω, ws)))
     a, b = complex(ω0), complex(ω0) * (1 + 1e-3) + 1e-5im
     fa, fb = λ(a), λ(b)
