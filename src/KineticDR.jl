@@ -1,14 +1,15 @@
 """
     KineticDR
 
-Local electrostatic dispersion relations for magnetised plasmas: any number of species, each with
-its own charge, mass, temperature, gradients and kinetic response, closed by a field equation.
+Dispersion relations for magnetised plasmas: any number of species, each with its own charge, mass,
+temperature, gradients and kinetic response, closed by an electrostatic or electromagnetic field
+equation; local (`Model`) and radially resolved (`RadialModel`, electrostatic).
 Units: m_i = e = B = T_i = N_i = 1, so Ω_i = ρ_i = 1, lengths in ρ_i, frequencies in Ω_i,
 potentials in T_i/e.
 """
 module KineticDR
 
-using LinearAlgebra: SymTridiagonal, eigen, det, mul!, opnorm, I
+using LinearAlgebra: SymTridiagonal, Diagonal, eigen, det, mul!, opnorm, I
 using PlasmaCore: Grid, ScalarField
 using SpecialFunctions: erfcx, besselix, besselj0
 using QuadGK: quadgk

@@ -422,7 +422,7 @@ end
     @test rmir.ω ≈ ref.ω atol = 1e-9
     # the argument principle sees every eigenvalue, the seeded search only some
     g = radial_grid(-20, 20, 80)
-    found = find_eigenmodes(g, m; re = -0.04:0.005:0.0, im = 0.001:0.002:0.006)
+    found = find_eigenmodes(g, m; re = -0.04:0.005:0.0, imag = 0.001:0.002:0.006)
     inrect(ω) = -0.04 < real(ω) < 0 && 0.0005 < imag(ω) < 0.006
     @test count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006) >= count(r -> inrect(r.ω), found) >= 1
     # drift in the radial operator: A is analytic through the real axis (Im ω < 0 is the continuation):
@@ -432,4 +432,29 @@ end
     dA_re = (operator(mg, md, ω0 + h) - operator(mg, md, ω0 - h)) / 2h
     dA_im = (operator(mg, md, ω0 + im * h) - operator(mg, md, ω0 - im * h)) / (2im * h)
     @test norm(dA_re - dA_im) < 1e-4 * norm(dA_re)
+end
+
+@testset "radial species interface" begin
+    # any tuple of species and field: at uniform profiles the operator is singular at the local root,
+    # with a flat null vector (k_x = 0 mode of the mirror basis)
+    g = radial_grid(-20, 20, 40; bc = :mirror, nmu = 160)
+    ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
+    el = Species(q = -1, m = 1 / 400, κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
+    for (sp, field) in (((ion, el), Quasineutrality()),                                   # kinetic electrons
+                        ((ion, Species(q = -1, response = Boltzmann())), Poisson(lambda2 = 0.5)))
+        m = RadialModel(sp, field; ky = 0.5, kpar = x -> 0.01)
+        loc = find_modes(local_model(m, 0.0)...; re = -0.08:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[end]
+        λ, φ = KD.smallest(operator(g, m, loc))
+        @test abs(λ) < 1e-12
+        @test maximum(abs.(φ ./ φ[1] .- 1)) < 1e-10
+    end
+    # profiles as functions x -> Species: the keyword constructor is this ion + Boltzmann model
+    m1 = sheared_slab(; ky = 0.5, Ls = 200.0, κT = -0.3)
+    m2 = RadialModel((x -> Species(κT = -0.3, response = Gyrokinetic()), Species(q = -1, response = Boltzmann()));
+                     ky = 0.5, kpar = x -> 0.5 * x / 200)
+    g2 = radial_grid(-20, 20, 40)
+    @test operator(g2, m1, -0.024 + 0.003im) == operator(g2, m2, -0.024 + 0.003im)
+    # not (yet) radial: electromagnetic fields, full-orbit responses
+    @test_throws ArgumentError RadialModel((ion, el), Darwin(beta = 0.1); ky = 0.5)
+    @test_throws ArgumentError operator(g2, RadialModel((Species(), el); ky = 0.5), 0.1 + 0.01im)
 end

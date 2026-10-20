@@ -1,38 +1,61 @@
-# Radially resolved gyrokinetic dispersion relation: for one k_y, the quasineutrality operator
-# A(ω) acting on φ(x) for ions with arbitrary radial profiles and adiabatic electrons. An
+# Radially resolved dispersion relation: for one k_y, the field operator A(ω) acting on φ(x), built
+# from the same `Species` and field equations as the local `Model`, with radial profiles. An
 # eigenmode is an ω at which A(ω) is singular.
 #
-# For each ω,
+# Each species contributes its charge response q_s δn_s/φ = (q_s² N_s/T_s)(W_s - 1) as an operator,
 #
-#   A(ω) φ = (n/T_e + n/T_i) φ - Σ_μ w_μ J_μ† [ (n/T_i) ⟨(ω - α ω_D - ω_*) / (ω - k∥ v∥ - ω_D)⟩_{v∥} ] J_μ φ
+#   A(ω) = Σ_s diag(q_s² N_s/T_s) - Σ_{s kinetic} Σ_μ w_μ J_sμ† diag[(q_s² N_s/T_s) W_sμ(x, ω)] J_sμ  (+ field terms)
 #
-# J_μ is the gyroaverage at magnetic moment μ (Gauss–Laguerre), ρ_μ(x) = √(2 μ T_i(x)) / B(x),
-# ω_* = (k_y T_i/B_drive) (κn + κT (μ + s²/2 - 3/2)) with κ = +d ln/dx (as everywhere in KineticDR),
-# ω_D = -k_y T_i (c s² + c⊥ μ), s = v∥/√T_i. The v∥ average is `quadratic_average`: exact for any Im ω;
-# with drift the μ quadrature is not, below the real axis (see `GyrokineticDrift`). Units: Ω_i, ρ_i, v_ti at the reference point (B = T_i = n = 1), φ in T_ref/e.
+#   W_sμ = ⟨(ω - α ω_D - ω_*) / (ω - k∥ v∥ - ω_D)⟩_{v∥},
+#
+# the residual -Σ_s ρ_s of `Quasineutrality` (`Poisson` adds λ²k²). J_sμ is the gyroaverage at magnetic
+# moment μ (Gauss–Laguerre), ρ_sμ(x) = √(2μ T_s m_s)/(|q_s| B(x)); ω_* = (T_s/q_s)(k_y/B_drive)(κn + κT(μ +
+# s²/2 - 3/2)) with κ = +d ln/dx (as everywhere in KineticDR); ω_D = -k_y (T_s/q_s)(c s² + c⊥ μ), s = v∥/v_ts.
+# The v∥ average is `quadratic_average`: exact for any Im ω; with drift the μ quadrature is not, below
+# the real axis (see `GyrokineticDrift`). `Boltzmann` species have W = 0. Units as in the local model
+# (Ω_i, ρ_i at B = 1), φ in T_i/e.
 
 """
+    RadialModel(species, field = Quasineutrality(); ky, kpar = x -> 0.0, B = x -> 1.0, Bdrive = B)
     RadialModel(; ky, kpar, n, Ti, Te, κn, κT, B, Bdrive, drift, drift_perp, alpha)
 
-Profiles are functions of x. `B` sets the local gyroradius and, unless `Bdrive` is given, the E×B
-speed of the gradient drive (bslLD's `add_kappaT!` uses B = 1: pass `Bdrive = x -> 1.0`).
-`kpar(x)` is k∥; `drift(x)` is c(x) in ω_D (e.g. `x -> 1/R0`, or `x -> 1/(B(x)(Rc + x))`);
-`drift_perp(x)` is a separate ∇B coefficient c⊥ (default `drift`). `κn`, `κT` are d ln n/dx and
-d ln T_i/dx; [`log_gradient`](@ref) derives them from profiles. `alpha` as in [`GyrokineticDrift`](@ref).
+A radially resolved model: `species` is a tuple whose entries are `Species` (uniform) or functions
+x -> `Species` (profiles of N, T, κn, κT and the response's lab parameters, e.g. the drift c(x) of a
+`GyrokineticDrift`), closed by `field` (`Quasineutrality` or `Poisson`; electromagnetic fields are not
+implemented radially). Responses with a radial kernel: `Gyrokinetic`, `GyrokineticDrift`, `Boltzmann`.
+`kpar(x)` is k∥. `B` sets the local gyroradius and, unless `Bdrive` is given, the E×B speed of the
+gradient drive (bslLD's `add_kappaT!` uses B = 1: pass `Bdrive = x -> 1.0`).
+
+The keyword form is the ion + Boltzmann-electron model: profiles n(x), Ti(x), Te(x), κn(x), κT(x)
+(d ln n/dx, d ln T_i/dx; [`log_gradient`](@ref) derives them), and `drift(x)` = c(x) in ω_D (e.g.
+`x -> 1/R0`) with ∇B coefficient `drift_perp(x)` (default `drift`) and `alpha` as in [`GyrokineticDrift`](@ref).
 """
-Base.@kwdef struct RadialModel{F1,F2,F3,F4,F5,F6,F7,F8,F9,F10}
+struct RadialModel{S<:Tuple,F<:AbstractFieldEquation,K,B1,B2}
+    species::S
+    field::F
     ky::Float64
-    kpar::F1 = x -> 0.0
-    n::F2 = x -> 1.0
-    Ti::F3 = x -> 1.0
-    Te::F4 = x -> 1.0
-    κn::F5 = x -> 0.0
-    κT::F6 = x -> 0.0
-    B::F7 = x -> 1.0
-    drift::F8 = x -> 0.0
-    Bdrive::F9 = B
-    drift_perp::F10 = drift
-    alpha::Float64 = 0.0
+    kpar::K
+    B::B1
+    Bdrive::B2
+end
+
+function RadialModel(species::Tuple, field::AbstractFieldEquation = Quasineutrality();
+                     ky, kpar = x -> 0.0, B = x -> 1.0, Bdrive = B)
+    field isa AbstractEMField &&
+        throw(ArgumentError("electromagnetic fields are not implemented for the radial problem"))
+    sp = map(s -> s isa Species ? (x -> s) : s, species)
+    return RadialModel(sp, field, float(ky), kpar, B, Bdrive)
+end
+
+function RadialModel(; ky, kpar = x -> 0.0, n = x -> 1.0, Ti = x -> 1.0, Te = x -> 1.0, κn = x -> 0.0,
+                     κT = x -> 0.0, B = x -> 1.0, Bdrive = B, drift = x -> 0.0, drift_perp = drift, alpha = 0.0)
+    function ion(x)
+        c, cp = drift(x), drift_perp(x)
+        response = c == 0 && cp == 0 ? Gyrokinetic() : GyrokineticDrift(; c, cperp = cp, alpha)
+        return Species(; T = Ti(x), N = n(x), κn = κn(x), κT = κT(x), response)
+    end
+    electron(x) = Species(; q = -1, T = Te(x), N = n(x), response = Boltzmann())
+    return RadialModel((ion, electron), Quasineutrality(); ky, kpar, B, Bdrive)
 end
 
 "Reduced magnetic shear: k∥ = k_y x / L_s + k_z, uniform gradients."
@@ -46,15 +69,11 @@ log_gradient(f; h = 1e-4) = x -> (log(f(x + h)) - log(f(x - h))) / (2h)
     local_model(m::RadialModel, x) -> (model, k)
 
 The local (homogeneous) `Model` and `Wavevector` at radius `x`, so that `dispersion(model, ω, k)`
-is the radial operator at uniform profiles. Needs B = B_drive = 1 (KineticDR has no B(x)).
+is the radial operator at uniform profiles. Needs B = B_drive = 1 (the local model has B = 1).
 """
 function local_model(m::RadialModel, x)
     (m.B(x) == 1 && m.Bdrive(x) == 1) || throw(ArgumentError("local_model needs B(x) = Bdrive(x) = 1"))
-    c, cp = m.drift(x), m.drift_perp(x)
-    response = c == 0 && cp == 0 ? Gyrokinetic() : GyrokineticDrift(; c, cperp = cp, alpha = m.alpha)
-    ion = Species(; T = m.Ti(x), N = m.n(x), κn = m.κn(x), κT = m.κT(x), response)
-    electron = Species(; q = -1, T = m.Te(x), N = m.n(x), response = Boltzmann())
-    return Model((ion, electron), Quasineutrality()), Wavevector(ky = m.ky, kz = m.kpar(x))
+    return Model(map(s -> s(x), m.species), m.field), Wavevector(ky = m.ky, kz = m.kpar(x))
 end
 
 """
@@ -67,8 +86,10 @@ Radial discretisation on the first spatial axis of a PlasmaCore `Grid` (nodes a 
   sin(π m (x - a)/L). This is the kinetic wall of the bslLD runs, whose eigenmodes vanish there.
 - `bc = :mirror`: unknowns at the cell centres x_j + δ/2 (N of them), cosine basis, even about both
   walls (bslLD's `Mirror()` halo). Admits wall-localised modes the simulation does not have.
-`nmu` Gauss–Laguerre nodes in μ (converge it when ω_D ~ ω, see [`GyrokineticDrift`](@ref)). Eigenvectors are returned as `ScalarField`s with one value per grid node
-(zero at the wall node for Dirichlet; cell centres for mirror).
+`nmu` Gauss–Laguerre nodes in μ for every kinetic species (the radial problem uses these, not a
+response's own `nmu`; converge it when ω_D ~ ω, see [`GyrokineticDrift`](@ref)). Eigenvectors are
+returned as `ScalarField`s with one value per grid node (zero at the wall node for Dirichlet; cell
+centres for mirror).
 """
 struct RadialGrid{G}
     grid::G
@@ -108,64 +129,95 @@ function radial_field(g::RadialGrid, φ::AbstractVector)
     return ScalarField(g.bc === :mirror ? Vector(φ) : vcat(zero(eltype(φ)), φ))
 end
 
-# Gyroaverage J_μ (nodes -> guiding centres) and its adjoint in the quadrature inner product.
-function gyroaverage(g::RadialGrid, m::RadialModel, mu)
+# Drift coefficients (c, c⊥, α) of a gyrokinetic response, lab units.
+drift_coefficients(::Gyrokinetic) = (0.0, 0.0, 0.0)
+drift_coefficients(r::GyrokineticDrift) = (r.c, r.cperp, r.alpha)
+
+# Gyroaverage J_μ (nodes -> guiding centres) of species `ss` (local species at the nodes) and its adjoint.
+function gyroaverage(g::RadialGrid, m::RadialModel, ss, mu)
     N = length(g.x)
     G = similar(g.C)
     for j in 1:N
-        ρ = sqrt(2 * mu * m.Ti(g.x[j])) / m.B(g.x[j])
+        s = ss[j]
+        ρ = sqrt(2 * mu * s.T * s.m) / (abs(s.q) * m.B(g.x[j]))
         for i in 1:N
             G[j, i] = g.C[j, i] * besselj0(sqrt(g.k[i]^2 + m.ky^2) * ρ)
         end
     end
     J = G * g.Cinv
-    return J, J'
+    return J, Matrix(J')
 end
 
-# ⟨(ω - α ω_D - ω_*)/(ω - k∥ v∥ - ω_D)⟩ over v∥ at one μ and radius X
-function vpar_response(m::RadialModel, X, ω, mu)
-    T = m.Ti(X)
-    dia = m.ky * T / m.Bdrive(X)
-    c, cp = m.drift(X), m.drift_perp(X)
-    a = m.ky * T * c
-    n0 = ω - dia * (m.κn(X) + m.κT(X) * (mu - 1.5)) + m.alpha * m.ky * T * cp * mu
-    n2 = -dia * m.κT(X) / 2 + m.alpha * a
-    return quadratic_average(n0, n2, a, abs(m.kpar(X)) * sqrt(T), ω + m.ky * T * cp * mu)
+# W = ⟨(ω - α ω_D - ω_*)/(ω - k∥ v∥ - ω_D)⟩ over v∥ for local species `s` at one μ and radius X
+function vpar_response(m::RadialModel, s::Species, X, ω, mu)
+    c, cp, alpha = drift_coefficients(s.response)
+    τ = s.T / s.q
+    dia = τ * m.ky / m.Bdrive(X)
+    a = m.ky * τ * c
+    n0 = ω - dia * (s.κn + s.κT * (mu - 1.5)) + alpha * m.ky * τ * cp * mu
+    n2 = -dia * s.κT / 2 + alpha * a
+    return quadratic_average(n0, n2, a, abs(m.kpar(X)) * thermal_speed(s), ω + m.ky * τ * cp * mu)
+end
+
+# Per kinetic species: local species at the nodes and the gyroaverages at each μ.
+struct KineticOperator{S}
+    ss::Vector{S}
+    J::Vector{Matrix{Float64}}
+    Jt::Vector{Matrix{Float64}}
 end
 
 struct RadialWorkspace
-    J::Vector{Matrix{Float64}}
-    Jt::Vector{Matrix{Float64}}
+    kinetic::Vector{KineticOperator}
+    diag::Vector{Float64}    # Σ_s q_s² N_s/T_s at the nodes
+    fieldop::Matrix{Float64} # field terms (Poisson λ²k²), zero for quasineutrality
     re::Matrix{Float64}      # real/imaginary parts of the accumulating operator (J real: two real gemms)
     im::Matrix{Float64}
     t1::Matrix{Float64}
 end
 
+field_operator(::Quasineutrality, g::RadialGrid, m::RadialModel) = zeros(length(g.x), length(g.x))
+function field_operator(f::Poisson, g::RadialGrid, m::RadialModel)
+    K = g.C * Diagonal(g.k .^ 2 .+ m.ky^2) * g.Cinv
+    return f.lambda2 .* (K + Diagonal(m.kpar.(g.x) .^ 2))
+end
+
 function RadialWorkspace(g::RadialGrid, m::RadialModel)
-    pairs = [gyroaverage(g, m, mu) for mu in g.mu]
     N = length(g.x)
-    return RadialWorkspace(first.(pairs), last.(pairs), zeros(N, N), zeros(N, N), zeros(N, N))
+    diag = zeros(N)
+    kinetic = KineticOperator[]
+    for sp in m.species
+        ss = [sp(x) for x in g.x]
+        diag .+= [s.q^2 * s.N / s.T for s in ss]
+        all(s -> s.response isa Boltzmann, ss) && continue
+        for s in ss
+            s.response isa Union{Gyrokinetic,GyrokineticDrift} || throw(ArgumentError(
+                "$(nameof(typeof(s.response))) has no radial kernel (Gyrokinetic, GyrokineticDrift, Boltzmann at every x)"))
+        end
+        pairs = [gyroaverage(g, m, ss, mu) for mu in g.mu]
+        push!(kinetic, KineticOperator(ss, first.(pairs), last.(pairs)))
+    end
+    return RadialWorkspace(kinetic, diag, field_operator(m.field, g, m), zeros(N, N), zeros(N, N), zeros(N, N))
 end
 
 """
     operator(g, m, ω[, ws]) -> A::Matrix{ComplexF64}
 
-Quasineutrality operator on the unknown nodes; `A φ = 0` for an eigenmode.
+Field operator on the unknown nodes; `A φ = 0` for an eigenmode.
 """
 function operator(g::RadialGrid, m::RadialModel, ω::Number, ws = RadialWorkspace(g, m))
     X = g.x
-    fill!(ws.re, 0)
+    ws.re .= ws.fieldop
     fill!(ws.im, 0)
-    for (q, mu) in enumerate(g.mu)
-        d = [g.wmu[q] * m.n(x) / m.Ti(x) * vpar_response(m, x, ω, mu) for x in X]
-        ws.t1 .= real.(d) .* ws.J[q]
-        mul!(ws.re, ws.Jt[q], ws.t1, -1, 1)
-        ws.t1 .= Base.imag.(d) .* ws.J[q]
-        mul!(ws.im, ws.Jt[q], ws.t1, -1, 1)
+    for K in ws.kinetic, (q, mu) in enumerate(g.mu)
+        d = [g.wmu[q] * s.q^2 * s.N / s.T * vpar_response(m, s, x, ω, mu) for (s, x) in zip(K.ss, X)]
+        ws.t1 .= real.(d) .* K.J[q]
+        mul!(ws.re, K.Jt[q], ws.t1, -1, 1)
+        ws.t1 .= Base.imag.(d) .* K.J[q]
+        mul!(ws.im, K.Jt[q], ws.t1, -1, 1)
     end
     A = complex.(ws.re, ws.im)
-    for (j, x) in enumerate(X)
-        A[j, j] += m.n(x) / m.Te(x) + m.n(x) / m.Ti(x)
+    for j in eachindex(X)
+        A[j, j] += ws.diag[j]
     end
     return A
 end
@@ -225,16 +277,16 @@ function local_roots(m::RadialModel, xs; re, imag)
 end
 
 """
-    find_eigenmodes(g, m; re, im, starts = []) -> Vector of `eigenmode` results
+    find_eigenmodes(g, m; re, imag, starts = []) -> Vector of `eigenmode` results
 
-Evaluates |λ_min(A(ω))| on the rectangle `re × im`, refines every local minimum (plus the guesses
+Evaluates |λ_min(A(ω))| on the rectangle `re × imag`, refines every local minimum (plus the guesses
 `starts`, e.g. [`local_roots`](@ref) along x) with [`eigenmode`](@ref), and returns the distinct
 converged modes, most unstable first. A seed search: it can miss modes (see [`count_eigenvalues`](@ref)).
 Nearly degenerate modes are common in sheared geometry, so seed it generously.
 """
-function find_eigenmodes(g::RadialGrid, m::RadialModel; re, im, starts = ComplexF64[], kw...)
+function find_eigenmodes(g::RadialGrid, m::RadialModel; re, imag, starts = ComplexF64[], kw...)
     ws = RadialWorkspace(g, m)
-    cand = [complex(a, b) for a in re, b in im]
+    cand = [complex(a, b) for a in re, b in imag]
     L = [abs(first(smallest(operator(g, m, ω, ws)))) for ω in cand]
     na, nb = size(L)
     starts = vcat(ComplexF64.(filter(isfinite, starts)),

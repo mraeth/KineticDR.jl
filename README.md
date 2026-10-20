@@ -64,9 +64,12 @@ ion = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 1/50, al
 find_modes(Model((ion, electron), Quasineutrality()), Wavevector(ky = 0.5); re = -0.06:0.01:0.0)
 
 g = radial_grid(-20, 20, 80; bc = :dirichlet)              # PlasmaCore Grid, one radial axis
-m = sheared_slab(; ky = 0.5, Ls = 200.0, κT = -0.3)        # or RadialModel(; ky, kpar, n, Ti, Te, κn, κT, B, drift, ...)
+m = sheared_slab(; ky = 0.5, Ls = 200.0, κT = -0.3)        # ion + Boltzmann electrons, RadialModel(; ky, kpar, n, Ti, ...)
+m2 = RadialModel((x -> Species(κT = -0.3, response = GyrokineticDrift(c = 1/(50 + x))),       # any species,
+                  Species(q = -1, m = 1/400, response = Gyrokinetic())), Quasineutrality();      # profiles as x -> Species
+                 ky = 0.5, kpar = x -> 0.5x / 200)
 r = eigenmode(g, m, -0.024 + 0.0034im)                     # (; ω, φ::ScalarField, λ, converged)
-find_eigenmodes(g, m; re = -0.07:0.002:0.0, im = 0.0005:0.001:0.012, starts = local_roots(m, 1:3:19; re = -0.08:0.01:0, imag = (0.002, 0.01)))
+find_eigenmodes(g, m; re = -0.07:0.002:0.0, imag = 0.0005:0.001:0.012, starts = local_roots(m, 1:3:19; re = -0.08:0.01:0, imag = (0.002, 0.01)))
 count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006)         # argument principle on det A(ω)
 ```
 
@@ -76,9 +79,14 @@ count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006)         # argument principle 
   integrand has a pole at distance ~|ω/(k_y c⊥)| from the real axis, error 1e-3 (nmu = 24), 1.4e-5 (80), 1e-9 (320) for k_y c = 0.01. Below the real axis the μ
   quadrature turns the drift-resonance continuum into `nmu` cuts, at real ω = k_z²/(4 k_y c) − k_y c⊥ μ_k:
   damped drift modes there depend on `nmu`; trust Im ω > 0 and converge `nmu` otherwise.
-- `RadialModel`: ion (q = m = 1) with profiles n(x), T_i(x), κn(x), κT(x), B(x), k∥(x), c(x); Boltzmann electrons T_e(x).
-  κ = +d ln/dx as everywhere here (bslLD's `add_kappaT!` uses the opposite sign). `local_model(m, x)` is the
-  homogeneous model at x; at uniform profiles the operator on the k_x = 0 mode is `dispersion` exactly.
+- `RadialModel(species, field; ky, kpar, B, Bdrive)`: the same `Species` and field equations as the local `Model`;
+  a species is a `Species` (uniform) or a function x -> `Species` (profiles, including a response's lab parameters
+  such as c(x)). Radial kernels: `Gyrokinetic`, `GyrokineticDrift`, `Boltzmann`; fields `Quasineutrality`,
+  `Poisson` (λ²(k_x² + k_y² + k∥²), k_x² from the basis). The keyword form `RadialModel(; ky, kpar, n, Ti, Te, κn,
+  κT, B, Bdrive, drift, drift_perp, alpha)` builds the ion + Boltzmann-electron model. κ = +d ln/dx as everywhere
+  here (bslLD's `add_kappaT!` uses the opposite sign). `local_model(m, x)` is the homogeneous `Model` at x; at
+  uniform profiles the operator on the k_x = 0 mode is `dispersion` exactly. The μ quadrature of the radial
+  operator is the grid's `nmu`, for every kinetic species.
 - Boundaries: `:dirichlet` (φ = 0 on the walls: unknowns on the N - 1 nodes after a, sine basis; the kinetic wall of
   the bslLD runs) and `:mirror` (cell centres, cosine basis, even about both walls). Eigenvectors are `ScalarField`s
   with one value per grid node (Dirichlet: zero at the first node; mirror: values at the cell centres, x_j + δ/2).
@@ -153,5 +161,5 @@ test/runtests.jl   tests
 ```
 
 Not implemented: drift and toroidal terms in the full-orbit (`GordeyevSeries`) and electromagnetic
-responses, gradients in the electromagnetic tensor, kinetic electrons and electromagnetic fields in the
-radial problem, complex k_x.
+responses, gradients in the electromagnetic tensor, full-orbit responses and electromagnetic fields in
+the radial problem, complex k_x.
