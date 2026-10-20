@@ -2,7 +2,7 @@ using Test
 using KineticDR
 using QuadGK: quadgk
 using SpecialFunctions: besselj
-using LinearAlgebra: eigen, SymTridiagonal, Diagonal, diag
+using LinearAlgebra: LinearAlgebra, eigen, SymTridiagonal, Diagonal, diag
 using PlasmaCore: ScalarField
 
 const KD = KineticDR
@@ -703,4 +703,68 @@ end
         d(β) = abs(first(find_root(Model((ion, ele), Darwin(beta = β)), ku, es; δ = 1e-4)) - es)
         @test ok && d(1e-5) < 1e-6 && d(1e-7) < 0.02 * d(1e-5)
     end
+end
+
+@testset "local models: overlap limits" begin
+    # Each limit: the relative difference at ε = 1e-3 is small and drops at least like ε^p from ε = 1e-2, without and with
+    # gradients (g = 0, 1; κn = 0.3, κT = -0.4 where the model has them). A ← B reads "A is the limit of B".
+    relerr(a::Number, b::Number) = abs(a - b) / abs(b)
+    relerr(a::AbstractMatrix, b::AbstractMatrix) = maximum(abs, a - b) / maximum(abs, b)
+    function converges(f, p; tol)
+        e2, e3 = relerr(f(1e-2)...), relerr(f(1e-3)...)
+        return e3 < tol && e2 / e3 > 10^(p - 0.2)
+    end
+    me = 1 / 1836
+    k0, ω0 = Wavevector(0.3, 0.7, 0.2), 0.6 + 0.08im
+    sp(r, g; s = 1.0, q = 1, m = q > 0 ? 1.0 : me, T = 1.0) = Species(; q, m, T, κn = 0.3g * s, κT = -0.4g * s, response = r)
+    for g in (0, 1)
+        # Gyrokinetic ← full orbit for ω, k∥v_t, ω_* ~ ε ≪ Ω (electrostatic and electromagnetic)
+        kg(ε) = Wavevector(0.3, 0.7, 0.2ε)
+        @test converges(ε -> (charge_response(sp(Gyrokinetic(), g; s = ε), ε * ω0, kg(ε)), charge_response(sp(GordeyevSeries(), g; s = ε), ε * ω0, kg(ε))), 2; tol = 1e-6)
+        @test converges(ε -> (susceptibility(sp(Gyrokinetic(), g; s = ε), ε * ω0, kg(ε)), susceptibility(sp(GordeyevSeries(), g; s = ε), ε * ω0, kg(ε))), 2; tol = 1e-6)
+        # DriftKinetic ← Gyrokinetic for k⊥ρ ~ ε at fixed ω_*; with polarisation at k∥ = 0 (fluid, W = 1 - ω_*/ω)
+        kd(ε, kz) = Wavevector(0.3ε, 0.7ε, kz)
+        @test converges(ε -> (charge_response(sp(DriftKinetic(), g; s = 1 / ε), ω0, kd(ε, 0.2)), charge_response(sp(Gyrokinetic(), g; s = 1 / ε), ω0, kd(ε, 0.2))), 2; tol = 1e-5)
+        @test converges(ε -> (charge_response(Species(κn = 0.3g / ε, response = DriftKinetic(polarization = true)), ω0, kd(ε, 0.0)),
+                              charge_response(Species(κn = 0.3g / ε, response = Gyrokinetic()), ω0, kd(ε, 0.0))), 2; tol = 1e-6)
+        # DriftKinetic ← full-orbit electrons, m → 0 at fixed ζ, electromagnetic
+        km(m) = Wavevector(0.5, 0.3, 0.05 * sqrt(m / 1e-2))
+        @test converges(ε -> (m = 1e-2ε^2; (susceptibility(sp(DriftKinetic(), g; q = -1, m), 0.3 + 0.01im, km(m)),
+                                            susceptibility(sp(GordeyevSeries(), g; q = -1, m), 0.3 + 0.01im, km(m)))), 2; tol = 1e-8)
+        # Cold ← DriftKinetic(polarization), T → 0 and ω, k∥ ~ ε ≪ Ω (k_x = 0: the Boussinesq polarisation has no -iκn k_x)
+        kc(ε) = Wavevector(0.0, 0.7, 0.2ε)
+        # (T_dk = 1e-8 electrostatically, where q²N/T cancels; 1e-10 in EM, where ω_* ∝ T_dk sets a floor)
+        dkc(g, T) = Species(; T, κn = 0.3g, response = DriftKinetic(polarization = true))
+        @test converges(ε -> (charge_response(Species(κn = 0.3g, response = Cold()), ε * ω0, kc(ε)), charge_response(dkc(g, 1e-8), ε * ω0, kc(ε))), 2; tol = 1e-6)
+        @test converges(ε -> (susceptibility(Species(κn = 0.3g, response = Cold()), ε * ω0, kc(ε)), susceptibility(dkc(g, 1e-10), ε * ω0, kc(ε))), 2; tol = 1e-6)
+        # Boltzmann ← full-orbit electrons for ζ = ω/(k∥v_t) and ω_*/(k∥v_t) ~ ε (the gradient drive is non-adiabatic)
+        @test converges(ε -> (charge_response(sp(Boltzmann(), g; s = ε, q = -1), ε * ω0, k0), charge_response(sp(GordeyevSeries(), g; s = ε, q = -1), ε * ω0, k0)), 1; tol = 3e-4)
+        # Boltzmann ← drift-kinetic electrons, electromagnetic, ζ, ω_* ~ ε: all elements outside the δB∥ direction (lab x for
+        # k⊥ along y; Boltzmann has no δB∥ coupling), and the density response to an inductive E∥ (magnetic flutter, δB_x ≠ 0)
+        kb = Wavevector(0.0, 0.5, 0.2)
+        ωb(ε) = ε * (0.05 + 0.01im)
+        bd(r, g, ε) = susceptibility(sp(r, g; s = ε, q = -1), ωb(ε), kb)
+        @test converges(ε -> (bd(Boltzmann(), g, ε)[2:3, 2:3], bd(DriftKinetic(), g, ε)[2:3, 2:3]), 1; tol = 3e-5)
+        ρind(r, ε) = (s = sp(r, g; s = ε, q = -1); kv = [kb.kx, kb.ky, kb.kz]; E = [0, 0, 1];
+                      -im * transpose(kv) * susceptibility(s, ωb(ε), kb) * E + transpose(charge_vector(s, ωb(ε), kb)) * E)
+        @test converges(ε -> (ρind(Boltzmann(), ε), ρind(DriftKinetic(), ε)), 1; tol = 3e-5)
+    end
+    # Cold ← full orbit, T ~ ε: converges at κ = 0; with a density gradient only after removing what the local (Boussinesq)
+    # kinetic theory drops, -w N m(-iκn k_x) - (w - 1) q N κn k_y/ω, and in EM only in the transverse rows (the longitudinal row
+    # carries the gradient charge, `charge_vector`)
+    w = 1 / (1 - ω0^2)
+    @test converges(ε -> (charge_response(Species(response = Cold()), ω0, k0), charge_response(Species(T = ε), ω0, k0)), 1; tol = 1e-3)
+    @test relerr(charge_response(Species(κn = 0.3, response = Cold()), ω0, k0), charge_response(Species(T = 1e-3, κn = 0.3), ω0, k0)) > 0.1
+    @test converges(ε -> (charge_response(Species(κn = 0.3, response = Cold()), ω0, k0) - (-w * (-im * 0.3 * k0.kx) - (w - 1) * 0.3 * k0.ky / ω0),
+                          charge_response(Species(T = ε, κn = 0.3), ω0, k0)), 1; tol = 1e-3)
+    kv = [k0.kx, k0.ky, k0.kz]
+    PT = LinearAlgebra.I - kv * kv' / (kv' * kv)
+    @test converges(ε -> (PT * susceptibility(Species(κn = 0.3, response = Cold()), ω0, k0), PT * susceptibility(Species(T = ε, κn = 0.3), ω0, k0)), 1; tol = 3e-3)
+    # field equations: Maxwell → Darwin as λ² → 0 (det), and the Maxwell root → the Poisson root as β → 0 (gradients)
+    mfield(f) = Model((Species(κn = 0.3, κT = -0.4), Species(q = -1, m = me, κn = 0.3, response = DriftKinetic())), f)
+    @test converges(ε -> (dispersion(mfield(Maxwell(beta = 0.01, lambda2 = ε)), ω0, k0), dispersion(mfield(Darwin(beta = 0.01)), ω0, k0)), 1; tol = 1e-3)
+    itg = (Species(κn = -0.1, κT = -0.4, response = Gyrokinetic()), Species(q = -1, m = me, κn = -0.1, κT = -0.4, response = DriftKinetic()))
+    ki = Wavevector(ky = 0.5, kz = 0.1)
+    es, = find_root(Model(itg, Poisson(lambda2 = 0.01)), ki, -0.1 + 0.05im)
+    @test converges(ε -> (first(find_root(Model(itg, Maxwell(beta = ε^2, lambda2 = 0.01)), ki, es; δ = 1e-4)), es), 2; tol = 1e-6)
 end

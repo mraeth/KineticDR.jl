@@ -122,9 +122,10 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
   (`charge_vector`) to the longitudinal row only. That row is then the full charge: its electrostatic limit
   −k·χ·k is `charge_response` exactly, and the EM roots tend to the electrostatic ones as β → 0.
 - **`Gyrokinetic` and `Boltzmann`.** `Gyrokinetic` is the hot tensor's p = 0 term plus the polarisation and E×B
-  currents of p ≠ 0 to lowest order in ω/Ω. `Boltzmann` is an isothermal massless fluid along B (δn = −qNψ/T) that
-  carries the E×B current but no δB∥ coupling or diamagnetic current; use `DriftKinetic` for those. The
-  polarisation of `DriftKinetic(polarization = true)` is not weighted by the gradient drive, as in its
+  currents of p ≠ 0 to lowest order in ω/Ω. `Boltzmann` is an isothermal massless fluid along the perturbed field
+  line: δn = −qNψ/T (E∥ = −ik∥ψ) plus the magnetic flutter across the gradient, −N κn δB_x/(ik∥), the kinetic
+  −(ω_*/ω)(φ − ψ). It carries the E×B current but no δB∥ coupling or diamagnetic current; use `DriftKinetic` for
+  those. The polarisation of `DriftKinetic(polarization = true)` is not weighted by the gradient drive, as in its
   electrostatic −N m k⊥².
 - Limits:
   - Real k only.

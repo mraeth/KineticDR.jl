@@ -94,15 +94,17 @@ function charge_vector(s::Species{Cold}, ω, k::Wavevector)
     return -im * s.q * s.N * s.κn / ω * (s.q / s.m) / (Ω^2 - ω^2) * SVector(-im * ω, Ω, 0)
 end
 
-# Boltzmann species, electromagnetic: isothermal massless fluid along B, δn = -qNψ/T with E∥ = -ik∥ψ, carrying the
-# E×B current qN(E_y, -E_x); j∥ from continuity, k·j - iκn j_x = ωρ. No δB∥ coupling and no diamagnetic current
-# (use `DriftKinetic` for those). Lab frame, j = -iω χ̃ E.
+# Boltzmann species, electromagnetic: isothermal massless fluid along the perturbed field line, T b·∇n = qN E∥ with
+# b·∇n = ik∥δn + δB_x N κn (magnetic flutter across the gradient, δB = k×E/ω), so δn = -qNψ/T - N κn δB_x/(ik∥),
+# E∥ = -ik∥ψ; it carries the E×B current qN(E_y, -E_x), and j∥ follows from continuity, k·j - iκn j_x = ωρ.
+# The flutter term is the kinetic -(ω_*/ω)(φ - ψ) of the ζ → 0 limit; it vanishes electrostatically (δB = 0).
+# No δB∥ coupling and no diamagnetic current (use `DriftKinetic` for those). Lab frame, j = -iω χ̃ E.
 function susceptibility(s::Species{Boltzmann}, ω, k::Wavevector)
     k.kz == 0 && throw(ArgumentError("Boltzmann species need k∥ ≠ 0 electromagnetically (δn = -qNψ/T, E∥ = -ik∥ψ)"))
     qN = s.q * s.N
     χ = @SMatrix [0 im*qN/ω 0;
                   -im*qN/ω 0 0;
-                  im*qN*k.ky/(ω*k.kz) -qN*(s.κn + im*k.kx)/(ω*k.kz) s.q^2*s.N/(s.T*k.kz^2)]
+                  im*qN*k.ky/(ω*k.kz) -im*qN*k.kx/(ω*k.kz) s.q^2*s.N/(s.T*k.kz^2)-qN*s.κn*k.ky/(ω*k.kz^2)]
     return χ + _charge_term(s, ω, k)
 end
 
