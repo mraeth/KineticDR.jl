@@ -8,8 +8,8 @@
 #
 # J_μ is the gyroaverage at magnetic moment μ (Gauss–Laguerre), ρ_μ(x) = √(2 μ T_i(x)) / B(x),
 # ω_* = (k_y T_i/B_drive) (κn + κT (μ + s²/2 - 3/2)) with κ = +d ln/dx (as everywhere in KineticDR),
-# ω_D = -k_y T_i (c s² + c⊥ μ), s = v∥/√T_i. The v∥ average is `quadratic_average`: exact, valid for
-# any Im ω. Units: Ω_i, ρ_i, v_ti at the reference point (B = T_i = n = 1), φ in T_ref/e.
+# ω_D = -k_y T_i (c s² + c⊥ μ), s = v∥/√T_i. The v∥ average is `quadratic_average`: exact for any Im ω;
+# with drift the μ quadrature is not, below the real axis (see `GyrokineticDrift`). Units: Ω_i, ρ_i, v_ti at the reference point (B = T_i = n = 1), φ in T_ref/e.
 
 """
     RadialModel(; ky, kpar, n, Ti, Te, κn, κT, B, Bdrive, drift, drift_perp, alpha)
@@ -178,12 +178,15 @@ function smallest(A)
 end
 
 """
-    eigenmode(g, m, ω0; tol = 1e-10, maxit = 60) -> (; ω, φ, λ, converged)
+    eigenmode(g, m, ω0; tol = 1e-10, ltol = 1e-8, maxit = 60) -> (; ω, φ, λ, converged)
 
 Secant iteration on λ_min(A(ω)) = 0 from the guess `ω0`, tracking the eigenvalue closest to zero.
-`φ` is a `ScalarField`, normalised to max |φ| = 1 and real at the maximum.
+`converged` needs both the step below `tol |ω|` and |λ| ≤ `ltol` ‖A‖₁ (a jump between eigenvalue
+branches can stall the step away from a root). `φ` is a `ScalarField`, normalised to max |φ| = 1
+and real at the maximum. With drift, a root at Im ω < 0 needs an `nmu` convergence check (see
+[`GyrokineticDrift`](@ref)).
 """
-function eigenmode(g::RadialGrid, m::RadialModel, ω0::Number; tol = 1e-10, maxit = 60,
+function eigenmode(g::RadialGrid, m::RadialModel, ω0::Number; tol = 1e-10, ltol = 1e-8, maxit = 60,
                    ws = RadialWorkspace(g, m))
     λ(ω) = first(smallest(operator(g, m, ω, ws)))
     a, b = complex(ω0), complex(ω0) * (1 + 1e-3) + 1e-5im
@@ -201,7 +204,9 @@ function eigenmode(g::RadialGrid, m::RadialModel, ω0::Number; tol = 1e-10, maxi
             break
         end
     end
-    λb, φ = smallest(operator(g, m, b, ws))
+    A = operator(g, m, b, ws)
+    λb, φ = smallest(A)
+    converged &= abs(λb) <= ltol * opnorm(A, 1)
     φ = φ ./ φ[argmax(abs.(φ))]
     return (; ω = b, φ = radial_field(g, φ), λ = λb, converged)
 end
@@ -236,9 +241,9 @@ function find_eigenmodes(g::RadialGrid, m::RadialModel; re, im, starts = Complex
                   [cand[i, j] for i in 1:na, j in 1:nb if
                    all(L[i, j] <= L[i2, j2] for i2 in max(1, i - 1):min(na, i + 1),
                        j2 in max(1, j - 1):min(nb, j + 1))])
-    modes = []
-    for ω0 in starts
-        r = eigenmode(g, m, ω0; ws, kw...)
+    results = [eigenmode(g, m, ω0; ws, kw...) for ω0 in starts]
+    modes = empty(results)
+    for r in results
         r.converged || continue
         any(abs(r.ω - q.ω) < 1e-6 * abs(r.ω) for q in modes) && continue
         push!(modes, r)

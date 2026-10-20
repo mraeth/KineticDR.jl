@@ -8,7 +8,7 @@ potentials in T_i/e.
 """
 module KineticDR
 
-using LinearAlgebra: SymTridiagonal, eigen, diagm, det, mul!
+using LinearAlgebra: SymTridiagonal, eigen, det, mul!, opnorm
 using PlasmaCore: Grid, ScalarField
 using SpecialFunctions: erfcx, besselix, besselj0
 using QuadGK: quadgk

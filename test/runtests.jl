@@ -202,6 +202,18 @@ end
     # a → 0 is the linear-denominator moments
     I0, I2 = KD.linear_moments(0.02 + 0.01im, 0.03)
     @test KD.quadratic_average(0.3, 0.1, 1e-9, 0.03, 0.02 + 0.01im) ≈ 0.3 * I0 + 0.1 * I2 rtol = 1e-6
+    # no cancellation at small a (a fixed linear/quadratic switch lost up to 3 digits here)
+    for a in (1e-12, 4e-8, 1e-7, 1e-6, -1e-6)
+        @test KD.quadratic_average(0.3 + 0.1im, -0.15, a, 0.3, 0.1 + 0.05im) ≈
+              brute(0.3 + 0.1im, -0.15, a, 0.3, 0.1 + 0.05im) rtol = 1e-12
+    end
+    # linear moments below the real axis are Z's continuation, also past the asymptotic switch |ζ| = 6
+    direct(ω, q) = (I0 = -plasma_Z(ω / (sqrt(2) * q)) / (sqrt(2) * q); (I0, (ω / q)^2 * I0 - ω / q^2))
+    for ζ in (5.999, 6.001, 9.0), arg in (-0.05π, -0.3π, -0.45π)
+        ω = sqrt(2) * 0.01 * ζ * cis(arg)
+        @test all(isapprox.(KD.linear_moments(ω, 0.01), direct(ω, 0.01); rtol = 1e-11))
+    end
+    @test KD.linear_moments(-0.1im, 0.01)[1] ≈ direct(-0.1im, 0.01)[1] rtol = 1e-12
     # analytic across Im e = 0 (the labelling of the roots is by continuation): complex derivative
     # along the real and imaginary direction agree, also with Im e < 0
     f(e) = KD.quadratic_average(0.3, 0.1, 0.01, 0.02, e)
@@ -224,6 +236,16 @@ end
             end, -12, 12; rtol = 1e-11)[1], 0, 40; rtol = 1e-9)[1]
         @test nonadiabatic_response(s, ω, k) ≈ W rtol = 1e-6
     end
+    # kinetic electrons: ω_D ∝ T_s/q_s, i.e. sgn(q) enters the rescaling to own units
+    e = Species(q = -1, m = 1 / 100, T = 2.0, κn = -0.04, κT = -0.16,
+                response = GyrokineticDrift(c = 0.02, cperp = 0.03, alpha = 1.0, nmu = 800))
+    ke, ωe, vt, ρ = Wavevector(ky = 0.5, kz = 0.002), 0.03 + 0.01im, sqrt(200.0), sqrt(0.02)
+    We = quadgk(μ -> exp(-μ) * KD.besselj0(ke.ky * ρ * sqrt(2μ))^2 * quadgk(v -> begin
+            ωD = 2 * ke.ky * (0.02 * v^2 + 0.03 * μ)              # -k_y (T/q)(c s² + c⊥ μ), T/q = -2
+            ωs = -2 * ke.ky * (-0.04 + -0.16 * (μ + v^2 / 2 - 1.5))
+            exp(-v^2 / 2) / sqrt(2π) * (ωe - ωD - ωs) / (ωe - ke.kz * vt * v - ωD)
+        end, -14, 14; rtol = 1e-12)[1], 0, 5, 20, 60; rtol = 1e-11)[1]
+    @test nonadiabatic_response(e, ωe, ke) ≈ We rtol = 1e-6
     # c → 0 is Gyrokinetic
     g = Species(κT = -0.3, response = Gyrokinetic())
     d = Species(κT = -0.3, response = GyrokineticDrift(c = 1e-12, nmu = 32))
@@ -266,6 +288,10 @@ end
         r = eigenmode(radial_grid(-20, 20, N; nmu), m, -0.0241 + 0.0034im)
         @test r.ω ≈ ref.ω atol = 1e-7
     end
+    # a centrally localised mode does not see the wall condition
+    rmir = eigenmode(radial_grid(-20, 20, 120; bc = :mirror), m, -0.0241 + 0.0034im)
+    @test rmir.converged
+    @test rmir.ω ≈ ref.ω atol = 1e-9
     # the argument principle sees every eigenvalue, the seeded search only some
     g = radial_grid(-20, 20, 80)
     found = find_eigenmodes(g, m; re = -0.04:0.005:0.0, im = 0.001:0.002:0.006)

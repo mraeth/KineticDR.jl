@@ -70,15 +70,18 @@ count_eigenvalues(g, m, -0.04, 0.0, 0.0005, 0.006)         # argument principle 
 ```
 
 - `GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 64)`: J₀² response with ω_D; the v∥ average is two Z
-  functions (`quadratic_average`), exact for any Im ω, so root finders work below the real axis. `alpha = 1` is
-  bslLD's prescribed drift. **Converge `nmu`** when ω_D ~ ω: the μ integrand has a pole at distance ~|ω/(k_y c⊥)| from
-  the real axis, error 1e-3 (nmu = 24), 1.4e-5 (80), 1e-9 (320) for k_y c = 0.01.
+  functions (`quadratic_average`), exact for any Im ω. c > 0 is bad curvature (ω_D along the ion diamagnetic
+  direction for κn, κT < 0). `alpha = 1` is bslLD's prescribed drift. **Converge `nmu`** when ω_D ~ ω: the μ
+  integrand has a pole at distance ~|ω/(k_y c⊥)| from the real axis, error 1e-3 (nmu = 24), 1.4e-5 (80), 1e-9 (320) for k_y c = 0.01. Below the real axis the μ
+  quadrature turns the drift-resonance continuum into `nmu` cuts, at real ω = k_z²/(4 k_y c) − k_y c⊥ μ_k:
+  damped drift modes there depend on `nmu`; trust Im ω > 0 and converge `nmu` otherwise.
 - `RadialModel`: ion (q = m = 1) with profiles n(x), T_i(x), κn(x), κT(x), B(x), k∥(x), c(x); Boltzmann electrons T_e(x).
   κ = +d ln/dx as everywhere here (bslLD's `add_kappaT!` uses the opposite sign). `local_model(m, x)` is the
   homogeneous model at x; at uniform profiles the operator on the k_x = 0 mode is `dispersion` exactly.
 - Boundaries: `:dirichlet` (φ = 0 on the walls: unknowns on the N - 1 nodes after a, sine basis; the kinetic wall of
   the bslLD runs) and `:mirror` (cell centres, cosine basis, even about both walls). Eigenvectors are `ScalarField`s
-  with one value per grid node.
+  with one value per grid node (Dirichlet: zero at the first node; mirror: values at the cell centres, x_j + δ/2).
+- `eigenmode` reports `converged` only if the secant step and |λ_min| are both small.
 - `find_eigenmodes` is a seed search and can miss nearly degenerate modes; `count_eigenvalues` counts them
   (L_s = 200 slab: 5 eigenvalues in a rectangle where the search finds 3).
 - Not exact: the radial operator drops cyclotron harmonics (≲ 1e-3 in γ in local tests); `operator` reuses a
