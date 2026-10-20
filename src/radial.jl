@@ -28,9 +28,9 @@ The local (homogeneous) model at radius `x`: every profile species x -> `Species
 """
 (m::Model)(x) = Model(map(s -> species_at(s, x), m.species), m.field)
 
-# A local solver handed a model with profiles
-charge_response(s::Function, ω, k::Wavevector) = _profile_error()
-susceptibility(s::Function, ω, k::Wavevector) = _profile_error()
+# A local solver handed a model with profiles (any species that is not a `Species`)
+charge_response(s, ω, k::Wavevector) = _profile_error()
+susceptibility(s, ω, k::Wavevector) = _profile_error()
 _profile_error() = throw(ArgumentError("the model has radial profiles x -> Species: evaluate it at a radius, model(x), " *
                                        "or solve the radial problem (eigenmode)"))
 
@@ -38,23 +38,24 @@ _profile_error() = throw(ArgumentError("the model has radial profiles x -> Speci
 log_gradient(f; h = 1e-4) = x -> (log(f(x + h)) - log(f(x - h))) / (2h)
 
 """
-    species_profile(; N = x -> 1.0, T = x -> 1.0, q = 1, m = 1, response = GordeyevSeries()) -> x -> Species
+    species_profile(; N = x -> 1.0, T = x -> 1.0, q = 1, m = 1, response = Gyrokinetic()) -> x -> Species
 
 A species with profiles N(x), T(x) and gradients κn = d ln N/dx, κT = d ln T/dx derived from them
 ([`log_gradient`](@ref)). `response` is a response or a function x -> response.
 """
-function species_profile(; N = x -> 1.0, T = x -> 1.0, q = 1.0, m = 1.0, response = GordeyevSeries())
+function species_profile(; N = x -> 1.0, T = x -> 1.0, q = 1.0, m = 1.0, response = Gyrokinetic())
     κn, κT = log_gradient(N), log_gradient(T)
     r = response isa AbstractResponse ? (x -> response) : response
     return x -> Species(; q, m, T = T(x), N = N(x), κn = κn(x), κT = κT(x), response = r(x))
 end
 
 # Guiding-centre profile f(species) seen at the particle position x: ∫dd g(d; ρ²(x + d)) f(s(x + d)), g the
-# Gaussian of variance ρ² = T m/q² (squared thermal gyroradius, d = v_y m/q). Cut at 12 ρ of the largest ρ
-# within ±20 (profiles may grow without bound); needs the profile there, beyond the walls.
+# Gaussian of variance ρ² = T m/q² (squared thermal gyroradius, d = v_y m/q). Cut at 12 ρ_max, ρ_max the
+# largest ρ within 12 ρ(x) of x (profiles may grow without bound); needs the profile there, beyond the walls.
 function gc_average(f, sp, x)
     ρ2(s) = s.T * s.m / s.q^2
-    dmax = 12 * sqrt(maximum(ρ2(species_at(sp, x + d)) for d in -20:20))
+    w = 12 * sqrt(ρ2(species_at(sp, x)))
+    dmax = 12 * sqrt(maximum(ρ2(species_at(sp, x + d)) for d in range(-w, w; length = 41)))
     function g(d)
         s = species_at(sp, x + d)
         return f(s) * exp(-d^2 / (2ρ2(s))) / sqrt(2π * ρ2(s))
@@ -85,7 +86,8 @@ end
     radial_grid(a, b, N; kw...)
 
 Radial discretisation on the first spatial axis of a PlasmaCore `Grid` (nodes a + (j-1)δ,
-δ = (b - a)/N, so N nodes on [a, b)); `radial_grid` builds the one-axis grid.
+δ = (b - a)/N, so N nodes on [a, b)); `radial_grid` builds the one-axis grid. The grid must have B = 1
+along z.
 - `bc = :dirichlet`: φ = 0 on the walls a and b; unknowns on the N - 1 nodes after a, sine basis
   sin(π m (x - a)/L). This is the kinetic wall of the bslLD runs, whose eigenmodes vanish there.
 - `bc = :mirror`: unknowns at the cell centres x_j + δ/2 (N of them), cosine basis, even about both
@@ -103,6 +105,8 @@ struct RadialGrid{G}
 end
 
 function RadialGrid(grid; bc = :dirichlet)
+    (grid.b0 == 1 && grid.Bdir == 3) ||
+        throw(ArgumentError("the radial problem assumes B = 1 along z (got b0 = $(grid.b0), Bdir = $(grid.Bdir))"))
     ax = grid.xaxes[1]
     N, h, a = length(ax), step(ax), first(ax)
     L = N * h
@@ -183,7 +187,9 @@ function WeberOperator(g::RadialGrid, k::Wavevector, ss)
     return WeberOperator(ss, W0, W1, zeros(ComplexF64, N, N), zeros(ComplexF64, N, N), zeros(ComplexF64, N, N))
 end
 
-struct RadialWorkspace
+struct RadialWorkspace{G,M}
+    g::G
+    m::M
     k::Wavevector{Float64}
     kinetic::Vector{WeberOperator}
     diag::Vector{Float64}    # adiabatic terms Σ_s a_s at the nodes
@@ -209,7 +215,7 @@ function RadialWorkspace(g::RadialGrid, m::Model, k::Wavevector)
         diag .+= [adiabatic_term(sp, x) for x in g.x]
         ss[1].response isa Gyrokinetic && push!(kinetic, WeberOperator(g, k, ss))
     end
-    return RadialWorkspace(k, kinetic, diag, fieldop)
+    return RadialWorkspace(g, m, k, kinetic, diag, fieldop)
 end
 
 """
@@ -219,6 +225,8 @@ Field operator on the unknown nodes; `A φ = 0` for an eigenmode. `k` gives k_y 
 it comes from the basis).
 """
 function operator(g::RadialGrid, m::Model, k::Wavevector, ω::Number, ws = RadialWorkspace(g, m, k))
+    (ws.g === g && ws.m === m && ws.k == k) ||
+        throw(ArgumentError("the workspace was built for another grid, model or wavevector"))
     A = complex(ws.fieldop)
     for K in ws.kinetic
         A .-= kinetic_operator!(K, g, ws.k, ω)
@@ -252,8 +260,10 @@ function kinetic_operator!(K::WeberOperator, g::RadialGrid, k::Wavevector, ω)
     return g.Cinv' * K.M * g.Cinv
 end
 
-# eigenvalue of smallest modulus and its eigenvector
+# eigenvalue of smallest modulus and its eigenvector; NaN if A is not finite (Z overflows far below the
+# real axis)
 function smallest(A)
+    all(isfinite, A) || return complex(NaN), fill(complex(NaN), size(A, 1))
     E = eigen(A)
     i = argmin(abs.(E.values))
     return E.values[i], E.vectors[:, i]
@@ -263,18 +273,24 @@ end
     eigenmode(g, m, k, ω0; tol = 1e-10, ltol = 1e-8, maxit = 60) -> (; ω, φ, λ, converged)
 
 Secant iteration on λ_min(A(ω)) = 0 from the guess `ω0`, tracking the eigenvalue closest to zero.
-`converged` needs both the step below `tol |ω|` and |λ| ≤ `ltol` ‖A‖₁ (a jump between eigenvalue
-branches can stall the step away from a root). `φ` is a `ScalarField`, normalised to max |φ| = 1
-and real at the maximum.
+`converged` needs the step below `tol |ω|` and |λ| ≤ `ltol` s, s = max|a_s| + ‖field terms‖₁ the
+ω-independent scale of A (a jump between eigenvalue branches can stall the step away from a root), and
+λ resolved: 100 eps ‖A‖₁ ≤ `ltol` s (far below the real axis ‖A‖ grows like e^{ζ²}).
+It is algebraic convergence for this grid: below the real axis the discretised continuum has
+eigenvalues that move with N, so check damped modes by refining the grid. An iteration that leaves
+the region where A is finite returns `converged = false`. `φ` is a `ScalarField`, normalised to
+max |φ| = 1 and real at the maximum.
 """
 function eigenmode(g::RadialGrid, m::Model, k::Wavevector, ω0::Number; tol = 1e-10, ltol = 1e-8, maxit = 60,
                    ws = RadialWorkspace(g, m, k))
     isfinite(ω0) || throw(ArgumentError("eigenmode: the guess ω0 = $ω0 is not finite"))
+    (ω0 == 0 && k.kz == 0) && throw(ArgumentError("eigenmode: ω0 = 0 with k_z = 0 (the response has a pole at ω = 0)"))
     λ(ω) = first(smallest(operator(g, m, k, ω, ws)))
     a, b = complex(ω0), complex(ω0) * (1 + 1e-3) + 1e-5im
     fa, fb = λ(a), λ(b)
     converged = false
     for _ in 1:maxit
+        isfinite(fb) || break
         Δ = -fb * (b - a) / (fb - fa)
         lim = 0.3 * max(abs(b), 1e-3)
         abs(Δ) > lim && (Δ *= lim / abs(Δ))
@@ -288,8 +304,10 @@ function eigenmode(g::RadialGrid, m::Model, k::Wavevector, ω0::Number; tol = 1e
     end
     A = operator(g, m, k, b, ws)
     λb, φ = smallest(A)
-    converged &= abs(λb) <= ltol * opnorm(A, 1)
-    φ = φ ./ φ[argmax(abs.(φ))]
+    scale = maximum(abs, ws.diag) + opnorm(ws.fieldop, 1)
+    # λ small on the ω-independent scale, and resolved: its rounding error eps‖A‖ well below that
+    converged &= isfinite(λb) && abs(λb) <= ltol * scale && 100 * eps() * opnorm(A, 1) <= ltol * scale
+    isfinite(λb) && (φ = φ ./ φ[argmax(abs.(φ))])
     return (; ω = b, φ = radial_field(g, φ), λ = λb, converged)
 end
 
@@ -311,7 +329,7 @@ end
 
 Evaluates |λ_min(A(ω))| on the rectangle `re × imag`, refines every local minimum (plus the guesses
 `starts`, e.g. [`local_roots`](@ref) along x) with [`eigenmode`](@ref), and returns the distinct
-converged modes, most unstable first. A seed search: it can miss modes (see [`count_eigenvalues`](@ref));
+converged modes inside the rectangle, most unstable first. A seed search: it can miss modes (see [`count_eigenvalues`](@ref));
 nearly degenerate modes are common, so seed it generously.
 """
 function find_eigenmodes(g::RadialGrid, m::Model, k::Wavevector; re, imag, starts = ComplexF64[], kw...)
@@ -325,8 +343,9 @@ function find_eigenmodes(g::RadialGrid, m::Model, k::Wavevector; re, imag, start
                        j2 in max(1, j - 1):min(nb, j + 1))])
     results = [eigenmode(g, m, k, ω0; ws, kw...) for ω0 in starts]
     modes = empty(results)
+    inbox(ω) = minimum(re) <= real(ω) <= maximum(re) && minimum(imag) <= Base.imag(ω) <= maximum(imag)
     for r in results
-        r.converged || continue
+        (r.converged && inbox(r.ω)) || continue
         any(abs(r.ω - q.ω) < 1e-6 * abs(r.ω) for q in modes) && continue
         push!(modes, r)
     end

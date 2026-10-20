@@ -134,7 +134,7 @@ ion = species_profile(; T, response = Gyrokinetic())   # x -> Species, κn and �
 ele = species_profile(; q = -1, N = particle_density(ion), response = Boltzmann())
 m = Model((ion, ele), Quasineutrality())               # or Poisson(lambda2 = ...)
 k = Wavevector(ky = 0.5, kz = 0.01)                    # kx = 0: it comes from the radial basis
-g = radial_grid(-20, 20, 80; bc = :dirichlet)          # φ = 0 at x = ±20; or bc = :mirror
+g = radial_grid(-20, 20, 80; bc = :dirichlet)          # φ = 0 at x = ±20; or bc = :mirror (B = 1 grids only)
 
 seeds = local_roots(m, k, -8:2:8; re = -0.08:0.01:0, imag = (0.002, 0.01))  # local roots along x
 modes = find_eigenmodes(g, m, k; re = -0.06:0.005:0.0, imag = 0.001:0.002:0.015, starts = seeds)
@@ -145,8 +145,9 @@ count_eigenvalues(g, m, k, -0.06, 0.0, 0.001, 0.015)   # how many eigenvalues th
 dispersion(m(0.0), r.ω, k)                             # m(x) is the local model at x
 ```
 
-- **Profiles.** `species_profile(; N, T, q, m, response)` derives κn, κT from N(x), T(x). A hand-written
-  `x -> Species(...)` uses its κn, κT exactly as given. A plain `Species` is uniform.
+- **Profiles.** `species_profile(; N, T, q, m, response = Gyrokinetic())` derives κn, κT from N(x), T(x).
+  A hand-written `x -> Species(...)` (any callable) uses its κn, κT exactly as given. A plain `Species`
+  is uniform.
 - **Guiding-centre convention (bsl6d).** The N(x), T(x) of a kinetic species are guiding-centre profiles.
   - Its adiabatic term is evaluated at the particle position, as an average over the gyroradius, which
     needs the profiles about 12 ρ beyond the walls.
@@ -158,9 +159,15 @@ dispersion(m(0.0), r.ω, k)                             # m(x) is the local mode
 - **Walls.** `:dirichlet` puts φ = 0 on both walls (the kinetic wall of the bslLD runs); `:mirror` makes
   φ even about both walls. A mode localised away from the walls must give the same ω with both.
 - **Finding modes.**
-  - `find_eigenmodes` is a seed search and can miss nearly degenerate modes. Seed it with `local_roots`
-    and check with `count_eigenvalues`. In the example the grid search alone finds 3 of the 4.
-  - `eigenmode` reports `converged` only when both the step and |λ_min(A)| are small.
+  - `find_eigenmodes` is a seed search and can miss nearly degenerate modes. It returns only modes
+    inside the `re × imag` rectangle. Seed it with `local_roots` and check with `count_eigenvalues`. In
+    the example the grid search alone finds 3 of the 4.
+  - `eigenmode` reports `converged` when the step is small and |λ_min(A)| is small and resolved. That is
+    convergence on this grid. Below the real axis the discretised continuum also has eigenvalues, which
+    move with N, so check damped modes by refining the grid. Far below the axis, where Z overflows, it
+    returns `converged = false`.
+  - `count_eigenvalues` builds A on about 1000 points of the rectangle's boundary: seconds at N = 80,
+    minutes at N = 240.
 - **Checks.** With uniform profiles the radial eigenvalue on the k_x = 0 mode is the local root.
   `dispersion(m(x), ω, k)` compares with the local model at any x.
 
