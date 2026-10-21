@@ -721,7 +721,7 @@ end
     # Each limit: the relative difference at ε = 1e-3 is small and drops at least like ε^p from ε = 1e-2, without and with
     # gradients (g = 0, 1; κn = 0.3, κT = -0.4 where the model has them). A ← B reads "A is the limit of B".
     relerr(a::Number, b::Number) = abs(a - b) / abs(b)
-    relerr(a::AbstractMatrix, b::AbstractMatrix) = maximum(abs, a - b) / maximum(abs, b)
+    relerr(a::AbstractArray, b::AbstractArray) = maximum(abs, a - b) / maximum(abs, b)
     function converges(f, p; tol)
         e2, e3 = relerr(f(1e-2)...), relerr(f(1e-3)...)
         return e3 < tol && e2 / e3 > 10^(p - 0.2)
@@ -760,6 +760,15 @@ end
         ρind(r, ε) = (s = sp(r, g; s = ε, q = -1); kv = [kb.kx, kb.ky, kb.kz]; E = [0, 0, 1];
                       -im * transpose(kv) * susceptibility(s, ωb(ε), kb) * E + transpose(KD.charge_vector(s, ωb(ε), kb)) * E)
         @test converges(ε -> (ρind(Boltzmann(), ε), ρind(DriftKinetic(), ε)), 1; tol = 3e-5)
+        # Boltzmann ← Gyrokinetic, ions and electrons, ζ, ω_* ~ ε: electrostatically at any k⊥ρ (here 0.76 for ions);
+        # electromagnetically also k⊥ρ ~ ε (the parallel response carries Γ₀), and only the elements yz, zy, zz (k⊥ along y:
+        # no δB∥ row and column, and no polarisation χ_yy, which a massless fluid lacks)
+        kbg(ε) = Wavevector(0.0, 0.5ε, 0.2)
+        par(r, q, ε) = (χ = susceptibility(sp(r, g; s = ε, q), ωb(ε), kbg(ε)); [χ[2, 3], χ[3, 2], χ[3, 3]])
+        for q in (1, -1)
+            @test converges(ε -> (charge_response(sp(Boltzmann(), g; s = ε, q), ε * ω0, k0), charge_response(sp(Gyrokinetic(), g; s = ε, q), ε * ω0, k0)), 1; tol = 3e-3)
+            @test converges(ε -> (par(Boltzmann(), q, ε), par(Gyrokinetic(), q, ε)), 1; tol = 5e-4)
+        end
     end
     # Cold ← full orbit, T ~ ε: converges at κ = 0; with a density gradient only after removing the drive the local kinetic
     # theory drops, -(w - 1) q N κn k_y/ω, and in EM only in the transverse rows (the longitudinal row carries the
