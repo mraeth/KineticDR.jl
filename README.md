@@ -56,8 +56,8 @@ Which response works with which model:
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | |
 | `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω | ✓ | ✓ | ✓ |
-| `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: δn = −qNψ/T (E∥ = −ik∥ψ) with the E×B current | ✓ | ✓ (k∥ ≠ 0) | ✓ |
-| `Cold()` | cold fluid (Stix S, D, P); density-gradient drive of the exact cold drift, no κT | ✓ | ✓ | |
+| `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
+| `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | |
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | |
 
 Field equations: `Quasineutrality()` and `Poisson(lambda2 = (λ_D/ρ_i)²)` are electrostatic, local and
@@ -117,11 +117,13 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
   to it.
 - Discard roots at ω ≈ 0. det(ω²𝒟) vanishes there for k∥ = 0, and with `DriftKinetic` electrons also for k∥ ≠ 0.
 - **`Gyrokinetic` and `Boltzmann`.** `Gyrokinetic` is the hot tensor's p = 0 term plus the polarisation and E×B
-  currents of p ≠ 0 to lowest order in ω/Ω. `Boltzmann` is an isothermal massless fluid along the field line,
-  δn = −qNψ/T (E∥ = −ik∥ψ), with the E×B current but no δB∥ coupling or diamagnetic current; use `DriftKinetic`
-  for those.
-- **Polarisation.** The polarisation charge of `DriftKinetic(polarization = true)` and `Cold` is Boussinesq,
-  −w N m k⊥²: the polarisation current across the density gradient is dropped, as in the local kinetic theory.
+  currents of p ≠ 0 to lowest order in ω/Ω. `Boltzmann` is the ζ → 0 limit of `DriftKinetic`: an isothermal
+  massless fluid along the field line, δn = −qNψ/T (E∥ = −ik∥ψ), with the E×B and the diamagnetic current. It
+  lacks only the transit-time damping of δB∥, O(k⊥²ρ²).
+- **Polarisation and the density gradient.** The polarisation charge of `DriftKinetic(polarization = true)` and
+  `Cold` is Boussinesq, −w N m k⊥², and the density gradient is advected by the E×B drift only, as in the local
+  kinetic theory: the polarisation current across the gradient is dropped. So `Cold` is the T → 0 limit of
+  `GordeyevSeries` also with κn ≠ 0.
 - Limits:
   - No gradients: a species with κ ≠ 0 throws.
   - Real k only.
@@ -223,7 +225,7 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
   - `susceptibility(r, ω, k)` for the electromagnetic path: the 3×3 tensor M in the frame where k⊥ ∥ x̂.
   The `Species` methods add the gradient drive, the units, the electron sign and the rotation to (kx, ky).
   A fluid response without a Gordeyev sum (`Cold`) defines `charge_response(::Species{R}, ω, k)` instead of
-  `gordeyev`; a polarisation charge outside W comes from `polarization_weight(::Species{R}, ω)`.
+  `gordeyev`.
 - A new electrostatic **field equation** is a subtype of `AbstractFieldEquation` with
   `residual(field, ρs, k)`, where ρs is the tuple of the species' q_s δn_s/φ.
 

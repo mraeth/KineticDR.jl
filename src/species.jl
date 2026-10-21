@@ -82,7 +82,7 @@ charge_response(s::Species, ω, k::Wavevector) =
     s.q^2 * s.N / s.T * (nonadiabatic_response(s, ω, k) - 1) - polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
 function charge_response(s::Species{Cold}, ω, k::Wavevector)
     s.κT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0 (got $(s.κT))"))
-    return -polarization_weight(s, ω) * (s.N * s.m * kperp(k)^2 + s.q * s.N * s.κn * k.ky / ω) + s.q^2 * s.N / s.m * k.kz^2 / ω^2
+    return -polarization_weight(s, ω) * s.N * s.m * kperp(k)^2 - s.q * s.N * s.κn * k.ky / ω + s.q^2 * s.N / s.m * k.kz^2 / ω^2
 end
 
 # Weight w of the Boussinesq polarisation charge -w N m k⊥² (B = 1) outside W: 0 for kinetic responses, 1 or 0

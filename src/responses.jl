@@ -35,9 +35,9 @@ end
     Cold()
 
 Cold fluid response (Stix S, D, P): M = [S' -iD' 0; iD' S' 0; 0 0 -1] with S' = -ω²/(ω²-1),
-D' = ω/(ω²-1). Electrostatic (`charge_response`), with the density-gradient drive of the exact cold drift
-v_x = w E_y/B and the Boussinesq polarisation charge:
-q δn/φ = -w (N m k⊥² + q N κn k_y/ω) + (q² N/m) k_z²/ω², w = Ω²/(Ω² - ω²). No temperature: κT must be 0.
+D' = ω/(ω²-1). Electrostatic (`charge_response`), with the Boussinesq polarisation charge and the E×B advection
+of the density gradient, as the local kinetic theory:
+q δn/φ = -w N m k⊥² - q N κn k_y/ω + (q² N/m) k_z²/ω², w = Ω²/(Ω² - ω²). No temperature: κT must be 0.
 """
 struct Cold <: AbstractResponse end
 
@@ -124,9 +124,10 @@ end
 """
     Boltzmann()
 
-No kinetic response (h = 0): the Boltzmann/adiabatic species, density response -q N φ/T. Electromagnetic: an
-isothermal massless fluid along the field line, δn = -qNψ/T with E∥ = -ik∥ψ, carrying the E×B current (needs
-k∥ ≠ 0; no δB∥ coupling, no diamagnetic current: use `DriftKinetic` for those).
+No kinetic response (h = 0): the Boltzmann/adiabatic species, density response -q N φ/T. Electromagnetic: the
+ζ → 0 limit of `DriftKinetic`, an isothermal massless fluid along the field line, δn = -qNψ/T with E∥ = -ik∥ψ,
+carrying the E×B and the diamagnetic current (needs k∥ ≠ 0). It lacks only the transit-time damping of δB∥,
+M_yy = 2b ζZ(ζ) of `DriftKinetic`, which is O(k⊥²ρ²) relative to the E×B current.
 """
 struct Boltzmann <: AbstractResponse end
 gordeyev(::Boltzmann, ω, k::Wavevector) = (zero(complex(ω)), zero(complex(ω)))
@@ -217,15 +218,26 @@ function susceptibility(::Gyrokinetic, ω, k::Wavevector)
     return _tensor_series(ω, k, 0:0) + @SMatrix [ω^2*P X 0; -X ω^2*Y 0; 0 0 0]
 end
 
-# (1 - Γ₀(b))/b, by its Taylor series below b = 1e-4 where 1 - Γ₀ cancels
-_one_minus_Gamma0_over_b(b) = b < 1e-4 ? 1 - b * (3 / 4 - b * (5 / 12 - b * 35 / 192)) : (1 - Gamma_p(0, b)) / b
+# (1 - Γ₀(b))/b, by its Taylor series below b = 0.5 where 1 - Γ₀ cancels: Γ₀ = Σ_k (-1)^k (2k)!/(k!³ 2^k) b^k
+function _one_minus_Gamma0_over_b(b)
+    b >= 0.5 && return (1 - Gamma_p(0, b)) / b
+    P, t = 0.0, 1.0                                   # t = k-th term of (1 - Γ₀)/b
+    for k in 0:60
+        P += t
+        abs(t) < eps() * abs(P) && break
+        t *= -b * (2k + 4) * (2k + 3) / (2 * (k + 2)^3)
+    end
+    return P
+end
 
-# Boltzmann: T b·∇δn = qN E∥, δn = -qNψ/T with E∥ = -ik∥ψ, plus the E×B current; j∥ follows from continuity,
-# k·j = ωρ. In the species' units: M_xy = iω, M_zy = -iω k⊥/k∥, M_zz = ω²/k∥².
+# Boltzmann: the ζ → 0 limit of `DriftKinetic`. T b·∇δn = qN E∥, δn = -qNψ/T with E∥ = -ik∥ψ; the E×B current
+# (M_xy = iω), the diamagnetic current of δn along k⊥ × b̂ (M_yz = iω k⊥/k∥), and j∥ from continuity, k·j = ωρ
+# (M_zy = -M_yz, M_zz = ω²/k∥²). Species units; Hermitian for real ω.
 function susceptibility(::Boltzmann, ω, k::Wavevector)
     k.kz == 0 && throw(ArgumentError("Boltzmann species need k∥ ≠ 0 electromagnetically (δn = -qNψ/T, E∥ = -ik∥ψ)"))
     c = zero(complex(ω))
-    return @SMatrix [c im*ω c; -im*ω c c; c -im*ω*kperp(k)/k.kz ω^2/k.kz^2]
+    Y = im * ω * kperp(k) / k.kz
+    return @SMatrix [c im*ω c; -im*ω c Y; c -Y ω^2/k.kz^2]
 end
 
 # Orbit integral for a Maxwellian (validation): M = iω ∫₀^∞ e^{iωτ} ⟨v v'ᵀ e^{i k·Δx}⟩ dτ with the

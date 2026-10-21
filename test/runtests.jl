@@ -625,28 +625,40 @@ end
     dk = Species(q = -1, m = 0.01, T = 0.5, κn = 0.2, κT = -0.4, response = DriftKinetic())
     gk = Species(q = -1, m = 0.01, T = 0.5, κn = 0.2ky / 1e-9, κT = -0.4ky / 1e-9, response = Gyrokinetic())
     @test charge_response(dk, ω, Wavevector(; ky, kz = 0.2)) ≈ charge_response(gk, ω, Wavevector(ky = 1e-9, kz = 0.2)) rtol = 1e-13
-    # cold = full-orbit kinetic as T → 0; with a density gradient after removing the drive that the local kinetic theory
-    # drops, the non-E×B part of the cold drift, -(w - 1) q N κn k_y/ω
+    # cold = full-orbit kinetic as T → 0, also with a density gradient (both advect it by the E×B drift only)
     k = Wavevector(0.4, 0.7, 0.1)
     for ω in (0.3 + 0.02im, 1.7 + 0.05im), q in (1, -1), κn in (0.0, 0.3)
-        w = 1 / (1 - ω^2)
-        @test charge_response(Species(; q, κn, response = Cold()), ω, k) + (w - 1) * q * κn * k.ky / ω ≈
+        @test charge_response(Species(; q, κn, response = Cold()), ω, k) ≈
               charge_response(Species(; q, κn, T = 1e-8, response = GordeyevSeries()), ω, k) rtol = 1e-6
     end
-    # gyrokinetic = full orbit to O(ω²) for ω ~ k∥v_t → 0 (electromagnetic)
-    gkerr(w) = (kk = Wavevector(0.9, 0.0, w); a = susceptibility(GordeyevSeries(), w * (1 + 0.3im), kk);
-                maximum(abs, a - susceptibility(Gyrokinetic(), w * (1 + 0.3im), kk)) / maximum(abs, a))
-    @test gkerr(1e-3) < 2e-6
-    @test gkerr(1e-3) < 2e-4 * gkerr(1e-1)
+    # gyrokinetic = full orbit to O(ω²) for ω ~ k∥v_t → 0 (electromagnetic, lab frame: both charge signs, k⊥ off the axes)
+    gkerr(w, q) = (kk = Wavevector(0.9cos(0.7), 0.9sin(0.7), w); ω = w * (1 + 0.3im);
+                   a = susceptibility(Species(; q), ω, kk);
+                   maximum(abs, a - susceptibility(Species(; q, response = Gyrokinetic()), ω, kk)) / maximum(abs, a))
+    for q in (1, -1)
+        @test gkerr(1e-3, q) < 2e-6
+        @test gkerr(1e-3, q) < 2e-4 * gkerr(1e-1, q)
+    end
     # (1 - Γ₀)/b: Taylor series and the direct form agree across the switch
-    @test KD._one_minus_Gamma0_over_b(prevfloat(1e-4)) ≈ (1 - Gamma_p(0, 1e-4)) / 1e-4 rtol = 1e-11
+    @test KD._one_minus_Gamma0_over_b(prevfloat(0.5)) ≈ (1 - Gamma_p(0, 0.5)) / 0.5 rtol = 1e-14
+    @test KD._one_minus_Gamma0_over_b(1e-3) ≈ 0.9992504164844406 rtol = 1e-15         # BigFloat reference
     @test KD._one_minus_Gamma0_over_b(0.0) == 1
-    # Boltzmann = drift-kinetic electrons as ζ = ω/(√2 k∥v_t) → 0 (parallel element; E×B exactly)
-    bz(m) = (kk = Wavevector(0.0, 0.5, 0.2); w = 0.05 + 0.01im;
+    # Boltzmann = drift-kinetic electrons as ζ = ω/(√2 k∥v_t) ∝ √m → 0: every element of χ, O(ζ)
+    bz(m) = (kk = Wavevector(0.3, 0.5, 0.2); w = 0.05 + 0.01im;
              (susceptibility(Species(q = -1, m = m, response = Boltzmann()), w, kk), susceptibility(Species(q = -1, m = m, response = DriftKinetic()), w, kk)))
-    (a, b), (c, d) = bz(1e-4), bz(1e-6)
-    @test abs(c[3, 3] - d[3, 3]) < 0.12 * abs(a[3, 3] - b[3, 3])
-    @test a[1, 2] ≈ b[1, 2] rtol = 1e-13
+    bzerr(m) = (ab = bz(m); maximum(abs, ab[1] - ab[2]) / maximum(abs, ab[2]))
+    @test bzerr(1e-6) < 1e-2
+    @test bzerr(1e-6) < 0.12 * bzerr(1e-4)
+    # finite β: Darwin roots with Boltzmann electrons = drift-kinetic electrons at m → 0 (cold ions); the electrons'
+    # Landau damping, Im ω ~ ζ, is what Boltzmann drops
+    kd = Wavevector(0.0, 0.4, 0.05)
+    for β in (0.1, 1.0)
+        ωb, okb = find_root(Model((Species(response = Cold()), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), kd, 0.045 + 0.0im)
+        ωd, okd = find_root(Model((Species(response = Cold()), Species(q = -1, m = 1e-8, response = DriftKinetic())), Darwin(beta = β)), kd, ωb)
+        @test okb && okd
+        @test real(ωb) ≈ real(ωd) rtol = 1e-8
+        @test abs(imag(ωd)) < 1e-4 * abs(ωd)
+    end
     # β → 0: the electromagnetic root tends to the electrostatic one, linearly in β (no gradients: an ion acoustic wave)
     ku = Wavevector(ky = 0.3, kz = 0.1)
     for ele in (Species(q = -1, T = 5.0, response = Boltzmann()), Species(q = -1, m = 1 / 1836, T = 5.0, response = DriftKinetic()))
