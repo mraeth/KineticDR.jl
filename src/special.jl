@@ -27,3 +27,7 @@ Gamma_p(p::Integer, x::Real) = besselix(abs(p), x)
 
 "dΓ_p/dx = (Γ_{p-1} + Γ_{p+1})/2 − Γ_p."
 dGamma_p(p::Integer, x::Real) = (Gamma_p(p - 1, x) + Gamma_p(p + 1, x)) / 2 - Gamma_p(p, x)
+
+"d²Γ_p/dx² from Γ_p = I_p e^{-x}, I_p'' = (I_{p-2} + 2I_p + I_{p+2})/4."
+d2Gamma_p(p::Integer, x::Real) =
+    (Gamma_p(p - 2, x) + 2Gamma_p(p, x) + Gamma_p(p + 2, x)) / 4 - (Gamma_p(p - 1, x) + Gamma_p(p + 1, x)) + Gamma_p(p, x)
