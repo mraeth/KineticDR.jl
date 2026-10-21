@@ -892,8 +892,8 @@ end
         ω0 = find_modes(m, Wavevector(ky = 0.5); re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
         @test ω0 ≈ ref atol = 1e-8
     end
-    # electrostatic only
-    @test_throws ArgumentError dispersion(Model((Species(response = GyrokineticDrift(c = 0.02)), Species(q = -1, m = 1 / 1836)),
+    # the prescribed drift (alpha ≠ 0) is electrostatic only
+    @test_throws ArgumentError dispersion(Model((Species(response = GyrokineticDrift(c = 0.02, alpha = 1.0)), Species(q = -1, m = 1 / 1836)),
                                                 Darwin(beta = 0.01)), 0.1 + 0.01im, k)
 end
 
@@ -940,4 +940,91 @@ end
     # guard: the μ nodes must agree along x
     mix = x -> Species(response = GyrokineticDrift(c = 0.02, nmu = x < 0 ? 32 : 64))
     @test_throws ArgumentError operator(mg, Model((mix, adiabatic_electrons()), Quasineutrality()), kk, 0.02 + 0.01im)
+end
+
+# Gyrokinetic field equations in (φ, A∥, δB∥) for GyrokineticDrift species, built independently of the tensor:
+# h = (qF/T)(ω - ω_*)/(ω - k∥v∥ - ω_D) ⟨χ⟩, ⟨χ⟩ = J0(φ - v∥A∥) + (T/q) 2μ (J1/z) δB∥;
+# Σ q(-(qN/T)φ + ∫J0 h) = 0, k⊥² A∥ = (β/2) Σ q∫v∥J0 h, δB∥ = -(β/2) Σ ∫ m v⊥² (J1/z) h
+function gk_field_matrix(sp, β, ω, k)
+    G = zeros(ComplexF64, 3, 3)
+    G[2, 2], G[3, 3] = k.kx^2 + k.ky^2, 1
+    for s in sp
+        r = KD.own_units(s.response, s)
+        Ω, vt = abs(s.q) / s.m, sqrt(s.T / s.m)
+        ρ = vt / Ω
+        ω′, kp, kz, ky = ω / Ω, hypot(k.kx, k.ky) * ρ, k.kz * ρ, k.ky * ρ
+        ωn, ωT = (s.T / s.q) * k.ky * s.κn / Ω, (s.T / s.q) * k.ky * s.κT / Ω
+        G[1, 1] -= s.q^2 * s.N / s.T
+        for (μ, w) in zip(r.mu, r.wmu)
+            sv = range(-12, 12, length = 2401)            # s average by the trapezoidal rule (exponentially accurate), Im ω > 0
+            z = kp * sqrt(2μ)
+            J0, J1 = KD.besselj0(z), KD.besselj1(z)
+            for (i, mom) in enumerate((v -> J0, v -> J0 * vt * v, v -> 2s.T * μ * J1 / z)),
+                (j, χ) in enumerate((v -> J0, v -> -J0 * vt * v, v -> (s.T / s.q) * 2μ * J1 / z))
+                pre = (s.q, -β / 2 * s.q, β / 2)[i]
+                g(v) = exp(-v^2 / 2) / sqrt(2π) * mom(v) * χ(v) * (ω′ - ωn - ωT * (μ + v^2 / 2 - 1.5)) /
+                       (ω′ - kz * v + ky * (r.c * v^2 + r.cperp * μ))
+                G[i, j] += pre * w * (s.q * s.N / s.T) * step(sv) * sum(g, sv)
+            end
+        end
+    end
+    return G
+end
+
+@testset "magnetic drift: electromagnetic" begin
+    # ⟨s^j/(a s² - b s + e)⟩ up to s⁶, both signs of b, linear and quadratic denominators
+    for (a, b, e) in ((0.0, 0.03, 0.02 + 0.01im), (0.0, -0.03, 0.02 + 0.01im), (0.01, -0.02, 0.01 + 0.01im), (-0.02, 0.05, -0.03 + 0.002im))
+        K = KD.average_kernel(a, b, e)
+        for j in 0:6
+            @test K[j + 1] ≈ quadgk(s -> exp(-s^2 / 2) / sqrt(2π) * s^j / (a * s^2 - b * s + e), -14, 14; rtol = 1e-12)[1] rtol = 1e-10
+        end
+    end
+    for k in (Wavevector(kx = 0.2, ky = 0.5, kz = 0.02), Wavevector(kx = -0.3, ky = -0.4, kz = -0.03)), ω in (-0.03 + 0.01im, 0.05 - 0.004im),
+        (q, m) in ((1, 1.0), (-1, 1 / 100)), (κn, κT) in ((0.0, 0.0), (-0.04, -0.16))
+        # c = 0 is the electromagnetic Gyrokinetic tensor
+        χg = susceptibility(Species(; q, m, κn, κT, response = Gyrokinetic()), ω, k)
+        @test susceptibility(Species(; q, m, κn, κT, response = GyrokineticDrift(c = 0.0, nmu = 128)), ω, k) ≈ χg rtol = 1e-12
+        # with drift the longitudinal row is the electrostatic GyrokineticDrift charge (continuity closed by the drift current)
+        d = Species(; q, m, κn, κT, response = GyrokineticDrift(c = 0.02, cperp = 0.03, nmu = 64))
+        kv = [k.kx, k.ky, k.kz]
+        @test -(transpose(kv) * susceptibility(d, ω, k) * kv) ≈ charge_response(d, ω, k) rtol = 1e-12
+    end
+    # Darwin with the tensor against the gyrokinetic field equations (independent) under the gyrokinetic ordering:
+    # ω, k∥, gradients, drift ∝ ε, the difference O(ω/Ω, ρ/L) → linear in ε (finite β: δB∥ matters, k_x ≠ 0)
+    sp(ε) = (Species(κn = -0.04ε, κT = -0.16ε, response = GyrokineticDrift(c = 0.02ε, nmu = 48)),
+             Species(q = -1, m = 1 / 400, κn = -0.04ε, κT = -0.16ε, response = GyrokineticDrift(c = 0.02ε, nmu = 48)))
+    β, ω1 = 0.03, -0.058906 + 0.043717im                 # unstable; dropping δB∥ moves it by 10%
+    Δ = map((0.5, 0.25)) do ε
+        k = Wavevector(kx = 0.2, ky = 0.5, kz = 0.01ε)
+        wG, okG = find_root(ω -> LinearAlgebra.det(gk_field_matrix(sp(ε), β, ω, k)), ω1 * ε; δ = 1e-3ε)
+        wD, okD = find_root(ω -> dispersion(Model(sp(ε), Darwin(beta = β)), ω, k), wG; δ = 1e-4ε)
+        @test okG && okD
+        abs(wD - wG) / abs(wG)
+    end
+    @test Δ[1] < 2e-3
+    @test 0.45 < Δ[2] / Δ[1] < 0.55
+    # β → 0: the Darwin root is the electrostatic one, linearly in β
+    ion = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02))
+    ele = Species(q = -1, m = 1 / 400, κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02))
+    k = Wavevector(ky = 0.5, kz = 0.01)
+    es, = find_root(Model((ion, ele), Quasineutrality()), k, -0.0287 + 0.0036im)
+    d = [abs(first(find_root(Model((ion, ele), Darwin(beta = β)), k, es; δ = 1e-5)) - es) for β in (1e-6, 1e-5)]
+    @test 8 < d[2] / d[1] < 12
+end
+
+@testset "magnetic drift: pressure balance" begin
+    sp = (Species(N = 1.0, T = 1.0, κn = -0.05, κT = -0.3), Species(q = -1, m = 1 / 100, N = 1.0, T = 2.0, κn = -0.05, κT = -0.1))
+    @test pressure_balance_cperp(sp, 0.02) ≈ 0.01 * (1.0 * (-0.35) + 2.0 * (-0.15))
+    # sign: ion orbit (Boris) in B(x) ẑ from pressure balance, B² = 1 - β (p(x) - p(0)), p = e^{κ_p x}: its ∇B drift
+    # v_y equals ω_D/k_y of GyrokineticDrift, -c⊥ v⊥²/2 (T μ = v⊥²/2 at m = 1)
+    β, κp = 0.02, -0.5
+    cperp = pressure_balance_cperp((Species(κn = κp),), β)
+    Bz(x) = sqrt(1 - β * (exp(κp * x) - 1))
+    x, v, dt = [0.0, 0.0], [0.4, 0.0], 2π / 400
+    for n in 1:400 * 50                                    # 50 gyroperiods, Boris rotation (q = m = 1, E = 0)
+        b = Bz(x[1]) * dt / 2
+        v = [v[1] + 2b / (1 + b^2) * (v[2] - b * v[1]), v[2] - 2b / (1 + b^2) * (v[1] + b * v[2])]
+        x += v * dt
+    end
+    @test x[2] / (50 * 2π) ≈ -cperp * 0.4^2 / 2 rtol = 0.02
 end

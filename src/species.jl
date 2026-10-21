@@ -49,7 +49,7 @@ end
 own_units(r::AbstractResponse, ::Species) = r
 
 # |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|. Lab-unit parameters of the response itself go
-# through `own_units` (electrostatic path; no response with lab parameters has a susceptibility).
+# through `own_units`.
 function _species_units(s::Species, k::Wavevector)
     Ω = abs(cyclotron_frequency(s))
     ρ = thermal_gyroradius(s)
@@ -71,17 +71,22 @@ function susceptibility(s::Species, ω, k::Wavevector)
     Ω, ks = _species_units(s, k)
     ωn = (s.T / s.q) * k.ky * s.κn / Ω
     ωT = (s.T / s.q) * k.ky * s.κT / Ω
-    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz), ωn, ωT)
     fy = s.q < 0 ? -1 : 1                                         # mirror y -> -y
-    F = SVector(1, fy, 1)
     kp = kperp(k)
     c, sn = kp == 0 ? (1.0, 0.0) : (k.kx / kp, k.ky / kp)
+    M = species_susceptibility(own_units(s.response, s), ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz), ωn, ωT, SVector(sn, fy * c))
+    F = SVector(1, fy, 1)
     R = @SMatrix [c -sn 0; sn c 0; 0 0 1]
     χ = (s.q^2 * s.N / s.m) / ω^2 * (R * (F .* M .* transpose(F)) * transpose(R))
     s.κn == 0 && return χ
     kv = SVector(k.kx, k.ky, k.kz)
     return χ + im * kv * transpose(charge_vector(s, ω, k)) / (kv' * kv)
 end
+
+# The response's tensor in the frame k⊥ ∥ x̂ (own units, positive gyration). `u` is the lab ŷ in that frame (mirrored
+# for negative charges), which the rotation hides: a response with a magnetic drift along ŷ (ω_D ∝ k_y, ∇B along x)
+# needs it, the others ignore it.
+species_susceptibility(r::AbstractResponse, ω, k::Wavevector, ωn, ωT, u) = susceptibility(r, ω, k, ωn, ωT)
 
 """
     charge_vector(s, ω, k) -> g

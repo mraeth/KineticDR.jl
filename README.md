@@ -57,7 +57,7 @@ Which response works with which model:
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | (not planned) |
 | `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω | ✓ | ✓ | ✓ |
-| `GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 64)` | `Gyrokinetic` with the magnetic drift ω_D (toroidal ITG) | ✓ | – | ✓ |
+| `GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 64)` | `Gyrokinetic` with the magnetic drift ω_D (toroidal ITG, ∇B) | ✓ | ✓ (`alpha = 0`) | ✓ |
 | `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
 | `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | ✓ |
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
@@ -108,7 +108,25 @@ find_modes(Model((ion, Species(q = -1, response = Boltzmann())), Quasineutrality
 - Below the real axis the quadrature turns the continuum of drift resonances into `nmu` cuts at real
   ω = k_z²/(4 k_y c) − k_y c⊥ μ_k: damped drift modes there depend on `nmu`. Trust Im ω > 0, converge `nmu` otherwise.
 - `alpha = 1` puts ω_D in the drive numerator as well (bslLD's prescribed drift, which does no work against E);
-  `alpha = 0` is gyrokinetic. Electrostatic only.
+  `alpha = 0` is gyrokinetic. `alpha = 1` is electrostatic only.
+- **Equilibrium ∇B.** c⊥ = −∂x ln B. A slab in pressure balance has c = 0 and
+  c⊥ = `pressure_balance_cperp(species, β)` = (β/2) Σ_s N_s T_s (κn_s + κT_s), a ∇B along −∇p (good-curvature-like
+  drift); pass the same β to the field. The diamagnetic drive is the gradient at fixed energy (flux-tube convention):
+  ∇B enters only through ω_D.
+- **Electromagnetic.** The tensor carries the gyrokinetic currents with the drift: the gyrocentre current of h,
+  h = (ω − ω_*)⟨χ⟩/(ω − k∥v∥ − ω_D), including its drift current J₀ v_D h, while the non-resonant part (pull-back and
+  magnetisation) does not drift; φ in Coulomb gauge. So the longitudinal row is the electrostatic charge
+  (continuity), c = 0 is the electromagnetic `Gyrokinetic`, and under the gyrokinetic ordering (ω, k∥, κ, c ∝ ε → 0)
+  Darwin with it converges to the gyrokinetic field equations in (φ, A∥, δB∥) linearly in ε (tested, β = 0.03,
+  δB∥ moving ω by 10%). Without the pull-back correction the tensor misses continuity by O(ω_D/ω).
+
+```julia
+β, g = 0.05, (κn = -0.05, κT = -0.5)
+cp = pressure_balance_cperp((Species(; g...), Species(; q = -1, g...)), β)   # slab in pressure balance: -0.0275
+gb = GyrokineticDrift(c = 0, cperp = cp)
+m = Model((Species(; g..., response = gb), Species(; q = -1, m = 1 / 1836, g..., response = gb)), Darwin(beta = β))
+find_modes(m, Wavevector(ky = 0.5, kz = 0.02); re = -0.3:0.03:0.3, imag = (0.02, 0.1))
+```
 
 ```julia
 critical_kappaT(model, k, 0.23, 1)                     # smallest κT for an unstable p = 1 root at κn = 0.23
@@ -273,7 +291,7 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
 
 ## Not implemented
 
-- Magnetic drift in the full-orbit, drift-kinetic and electromagnetic responses (only `GyrokineticDrift`, electrostatic).
+- Magnetic drift in the full-orbit and drift-kinetic responses (only `GyrokineticDrift`), and in the radial EM problem.
 - Magnetic shear, B(x) and a consistent equilibrium ∇B in the radial problem.
 - Electromagnetic fields in the radial problem.
 - Complex k.
@@ -286,7 +304,8 @@ src/special.jl     plasma Z function, Γ_p = I_p e^{-x}
 src/types.jl       Wavevector, abstract types
 src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral, Cold, DriftKinetic
 src/species.jl     Species, Model, charge_response, susceptibility, with_gradients
-src/drift.jl       GyrokineticDrift, quadratic_average (v∥ average with drift), Gauss–Laguerre nodes
+src/drift.jl       GyrokineticDrift (electrostatic and electromagnetic), polynomial_average (v∥ average with drift),
+                   pressure_balance_cperp, Gauss–Laguerre nodes
 src/fields.jl      Quasineutrality, Poisson, Darwin, Maxwell, dispersion, dispersion_matrix
 src/solve.jl       root finders and gradient scans
 src/radial.jl      profile species, radial grid and operator, eigenmode solvers
