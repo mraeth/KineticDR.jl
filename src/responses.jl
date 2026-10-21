@@ -3,7 +3,9 @@
 # S(T) = Σ_p Γ_p(T k⊥²) a Z((ω-p) a), a = 1/(|kz|√(2T)), is the Gordeyev sum at T = 1 and S_T
 # its T-derivative. The nonadiabatic density response to φ follows for any Maxwellian background:
 #     ∫h d³v / φ = -ω S + ωT S_T + ωn S                       (PRL 133, 195101, Eq. 9)
-# so a response model only has to supply (S, S_T).
+# so a kinetic response model only has to supply (S, S_T). A fluid response (`Cold`) has no Gordeyev sum and
+# defines `charge_response(::Species{R}, ω, k)` instead; a polarisation charge -w N m k⊥² outside W comes from
+# `polarization_weight` (`DriftKinetic`).
 
 """
     GordeyevSeries(; pmax = nothing, tol = 1e-15)
@@ -27,6 +29,31 @@ quadrature, and of its T-derivative. Needs Im ω > 0 or kz ≠ 0 (then also Im �
 """
 Base.@kwdef struct GordeyevIntegral <: AbstractResponse
     tmax_factor::Float64 = 40.0
+end
+
+"""
+    Cold()
+
+Cold fluid response (Stix S, D, P): M = [S' -iD' 0; iD' S' 0; 0 0 -1] with S' = -ω²/(ω²-1),
+D' = ω/(ω²-1). Electrostatic (`charge_response`), with the Boussinesq polarisation charge and the E×B advection
+of the density gradient, as the local kinetic theory:
+q δn/φ = -w N m k⊥² - q N κn k_y/ω + (q² N/m) k_z²/ω², w = Ω²/(Ω² - ω²). No temperature: κT must be 0.
+"""
+struct Cold <: AbstractResponse end
+
+"""
+    DriftKinetic(; polarization = false)
+
+Drift-kinetic species, no finite Larmor radius. Electromagnetic: the m → 0 limit of the hot tensor at
+fixed ζ = ω/(√2 |k∥| v_t) (electrons): E×B Hall current, parallel Landau response -ζ² Z'(ζ), and the
+n = 0 coupling to δB∥ (μ∇∥B force and perpendicular pressure): M_yy = 2b ζ Z(ζ),
+M_yz = -M_zy = -i √(b/2) ζ Z'(ζ), b = (k⊥ρ_t)², which stay finite in χ as m → 0.
+Electrostatic: the p = 0 term at k⊥ρ = 0 (Γ₀ = 1, any gradients).
+`polarization = true` adds the polarisation drift (M_xx = M_yy += ω², i.e. χ_xx = N m/q² in units
+of ω_pi²/Ω_i²; electrostatic, the charge response -N m k⊥²).
+"""
+Base.@kwdef struct DriftKinetic <: AbstractResponse
+    polarization::Bool = false
 end
 
 function _series(ω, k::Wavevector, ps)
@@ -66,6 +93,9 @@ gordeyev(r::GordeyevSeries, ω, k::Wavevector) = _series(ω, k, _harmonics(r, kp
 
 gordeyev(::Gyrokinetic, ω, k::Wavevector) = _series(ω, k, 0:0)
 
+gordeyev(::DriftKinetic, ω, k::Wavevector) = _series(ω, Wavevector(0.0, 0.0, k.kz), 0:0)   # Γ₀(0) = 1
+gordeyev(::Cold, ω, k::Wavevector) = throw(ArgumentError("Cold has no Gordeyev sum (its charge response is the fluid one)"))
+
 # Orbit-integral cut-off: the integrand is bounded by exp(-γt - kz² t²/2); stop where it is e^{-tmax_factor}.
 function _tmax(r::GordeyevIntegral, γ, kz2)
     (γ > 0 || kz2 > 0) || throw(ArgumentError("GordeyevIntegral needs Im ω > 0 or kz ≠ 0"))
@@ -91,7 +121,14 @@ function gordeyev(r::GordeyevIntegral, ω, k::Wavevector)
     return im * I0, im * I1
 end
 
-"No kinetic response (h = 0): the Boltzmann/adiabatic species, density response -q N φ/T only. Electrostatic only."
+"""
+    Boltzmann()
+
+No kinetic response (h = 0): the Boltzmann/adiabatic species, density response -q N φ/T. Electromagnetic: the
+ζ → 0 limit of `DriftKinetic`, an isothermal massless fluid along the field line, δn = -qNψ/T with E∥ = -ik∥ψ,
+carrying the E×B and the diamagnetic current (needs k∥ ≠ 0). It lacks only the transit-time damping of δB∥,
+M_yy = 2b ζZ(ζ) of `DriftKinetic`, which is O(k⊥²ρ²) relative to the E×B current.
+"""
 struct Boltzmann <: AbstractResponse end
 gordeyev(::Boltzmann, ω, k::Wavevector) = (zero(complex(ω)), zero(complex(ω)))
 
@@ -109,34 +146,10 @@ end
 # ── Electromagnetic responses ─────────────────────────────────────────────────────────────────
 # Interface:  susceptibility(r, ω, k) -> M (3×3), in the species' own units for positive gyration,
 # b̂ = ẑ and k = (k⊥, 0, k∥), k⊥ = kperp(k) ≥ 0. The species susceptibility is χ_s = (ω_ps²/ω²) M
-# (see `susceptibility(::Species, ω, k)`). No gradients: homogeneous Maxwellian background.
-
-"""
-    Cold()
-
-Cold fluid response (Stix S, D, P): M = [S' -iD' 0; iD' S' 0; 0 0 -1] with S' = -ω²/(ω²-1),
-D' = ω/(ω²-1). Electromagnetic only.
-"""
-struct Cold <: AbstractResponse end
-
-"""
-    DriftKinetic(; polarization = false)
-
-m → 0 limit of the hot tensor at fixed ζ = ω/(√2 |k∥| v_t) (electrons): E×B Hall current, parallel
-Landau response -ζ² Z'(ζ), and the n = 0 coupling to δB∥ (μ∇∥B force and perpendicular pressure):
-M_yy = 2b ζ Z(ζ), M_yz = -M_zy = -i √(b/2) ζ Z'(ζ), b = (k⊥ρ_t)², which stay finite in χ as m → 0.
-`polarization = true` adds the polarisation drift (M_xx = M_yy += ω², i.e. χ_xx = N m/q² in units
-of ω_pi²/Ω_i²). Electromagnetic only.
-"""
-Base.@kwdef struct DriftKinetic <: AbstractResponse
-    polarization::Bool = false
-end
+# (see `susceptibility(::Species, ω, k)`). No gradients: homogeneous background.
 
 susceptibility(r::AbstractResponse, ω, k::Wavevector) =
     throw(ArgumentError("$(nameof(typeof(r))) has no electromagnetic susceptibility"))
-gordeyev(r::Union{Cold,DriftKinetic}, ω, k::Wavevector) =
-    throw(ArgumentError("$(nameof(typeof(r))) is electromagnetic only (no electrostatic response)"))
-
 function susceptibility(::Cold, ω, k::Wavevector)
     d = ω^2 - 1
     S, D = -ω^2 / d, ω / d
@@ -190,6 +203,42 @@ function _tensor_series(ω, k::Wavevector, ns)
 end
 
 susceptibility(r::GordeyevSeries, ω, k::Wavevector) = _tensor_series(ω, k, _harmonics(r, kperp(k)^2))
+
+# Gyrokinetic limit of the hot tensor: the p = 0 term exactly; p ≠ 0 to lowest order in ω (ω ≪ Ω, k∥v_t ≪ Ω):
+# M_xx += ω² (1 - Γ₀)/b, M_yy += ω² Σ_{p≠0} (Γ_p/b - 2b Γ_p'/p²), M_xy += -iω Γ₀' (polarisation, E×B with FLR).
+# The p ≠ 0 parts of xz, yz, zz are O(ω k∥v_t, ω²) and dropped.
+function susceptibility(::Gyrokinetic, ω, k::Wavevector)
+    b = kperp(k)^2
+    P = _one_minus_Gamma0_over_b(b)
+    Y = P
+    for p in 1:last(_harmonics(GordeyevSeries(), b))
+        Y -= 4b * dGamma_p(p, b) / p^2
+    end
+    X = -im * ω * dGamma_p(0, b)
+    return _tensor_series(ω, k, 0:0) + @SMatrix [ω^2*P X 0; -X ω^2*Y 0; 0 0 0]
+end
+
+# (1 - Γ₀(b))/b, by its Taylor series below b = 0.5 where 1 - Γ₀ cancels: Γ₀ = Σ_k (-1)^k (2k)!/(k!³ 2^k) b^k
+function _one_minus_Gamma0_over_b(b)
+    b >= 0.5 && return (1 - Gamma_p(0, b)) / b
+    P, t = 0.0, 1.0                                   # t = k-th term of (1 - Γ₀)/b
+    for k in 0:60
+        P += t
+        abs(t) < eps() * abs(P) && break
+        t *= -b * (2k + 4) * (2k + 3) / (2 * (k + 2)^3)
+    end
+    return P
+end
+
+# Boltzmann: the ζ → 0 limit of `DriftKinetic`. T b·∇δn = qN E∥, δn = -qNψ/T with E∥ = -ik∥ψ; the E×B current
+# (M_xy = iω), the diamagnetic current of δn along k⊥ × b̂ (M_yz = iω k⊥/k∥), and j∥ from continuity, k·j = ωρ
+# (M_zy = -M_yz, M_zz = ω²/k∥²). Species units; Hermitian for real ω.
+function susceptibility(::Boltzmann, ω, k::Wavevector)
+    k.kz == 0 && throw(ArgumentError("Boltzmann species need k∥ ≠ 0 electromagnetically (δn = -qNψ/T, E∥ = -ik∥ψ)"))
+    c = zero(complex(ω))
+    Y = im * ω * kperp(k) / k.kz
+    return @SMatrix [c im*ω c; -im*ω c Y; c -Y ω^2/k.kz^2]
+end
 
 # Orbit integral for a Maxwellian (validation): M = iω ∫₀^∞ e^{iωτ} ⟨v v'ᵀ e^{i k·Δx}⟩ dτ with the
 # orbit traced back by τ, v' = R(τ) v, Δx = (-sin τ v_x + (1 - cos τ) v_y, ·, -τ v_z). For a unit
