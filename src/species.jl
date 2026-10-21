@@ -12,7 +12,8 @@
 
 The defaults are the reference ion. `response` is any `AbstractResponse`: `GordeyevSeries`
 (all harmonics, or `pmax = 12` as in Maeyama), `Gyrokinetic` (p = 0), `Boltzmann` (adiabatic),
-`GordeyevIntegral` (validation), `DriftKinetic` and `Cold` (no finite Larmor radius).
+`GordeyevIntegral` (validation), `DriftKinetic` and `Cold` (no finite Larmor radius), `GyrokineticDrift`
+(`Gyrokinetic` with the magnetic drift, electrostatic).
 """
 struct Species{R<:AbstractResponse}
     q::Float64
@@ -41,10 +42,14 @@ function nonadiabatic_response(s::Species, ω, k::Wavevector)
     Ω, ks = _species_units(s, k)
     ωn = (s.T / s.q) * k.ky * s.κn / Ω                           # ω_*s / |Ω_s|
     ωT = (s.T / s.q) * k.ky * s.κT / Ω                           # ω_*Ts / |Ω_s|
-    return nonadiabatic_response(s.response, ω / Ω, ks, ωn, ωT)
+    return nonadiabatic_response(own_units(s.response, s), ω / Ω, ks, ωn, ωT)
 end
 
-# |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|.
+"Hook: the response with any lab-unit parameters expressed in the species' own units (default: unchanged)."
+own_units(r::AbstractResponse, ::Species) = r
+
+# |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|. Lab-unit parameters of the response itself go
+# through `own_units` (electrostatic path; no response with lab parameters has a susceptibility).
 function _species_units(s::Species, k::Wavevector)
     Ω = abs(cyclotron_frequency(s))
     ρ = thermal_gyroradius(s)
