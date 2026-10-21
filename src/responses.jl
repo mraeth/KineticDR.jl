@@ -275,6 +275,13 @@ _susceptibility(r::GordeyevSeries, ω, k::Wavevector) = first(_tensor_series(ω,
 # The p ≠ 0 parts of xz, yz, zz are O(ω k∥v_t, ω²) and dropped.
 function susceptibility_T(::Gyrokinetic, ω, k::Wavevector)
     M0, M0T = _tensor_series(ω, k, 0:0, Val(true))
+    Mp, MpT = _gyrokinetic_polarization_T(ω, k)
+    return M0 + Mp, M0T + MpT
+end
+
+# The p ≠ 0 part of `Gyrokinetic` (polarisation, E×B with FLR) and its temperature derivative; shared with
+# `GyrokineticDrift`, whose drift does not enter it at this order.
+function _gyrokinetic_polarization_T(ω, k::Wavevector)
     b = kperp(k)^2
     P, PT = _one_minus_Gamma0_over_b(b)
     Y, YT = P, PT
@@ -283,7 +290,7 @@ function susceptibility_T(::Gyrokinetic, ω, k::Wavevector)
         YT -= 4(b * dGamma_p(p, b) + b^2 * d2Gamma_p(p, b)) / p^2
     end
     Mp(P, Y, X) = @SMatrix [ω^2*P X 0; -X ω^2*Y 0; 0 0 0]
-    return M0 + Mp(P, Y, -im * ω * dGamma_p(0, b)), M0T + Mp(PT, YT, -im * ω * b * d2Gamma_p(0, b))
+    return Mp(P, Y, -im * ω * dGamma_p(0, b)), Mp(PT, YT, -im * ω * b * d2Gamma_p(0, b))
 end
 
 # P = (1 - Γ₀(b))/b and b dP/db, by the Taylor series below b = 0.5 where 1 - Γ₀ cancels:

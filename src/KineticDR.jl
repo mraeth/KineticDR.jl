@@ -12,7 +12,7 @@ module KineticDR
 
 using LinearAlgebra: SymTridiagonal, Diagonal, eigen, det, opnorm, I, mul!
 using PlasmaCore: Grid, ScalarField
-using SpecialFunctions: erfcx, besselix, besselj0
+using SpecialFunctions: erfcx, besselix, besselj0, besselj1
 using QuadGK: quadgk
 using StaticArrays: SMatrix, SVector, @SMatrix
 
@@ -27,7 +27,7 @@ include("radial.jl")
 
 export Wavevector, kperp
 export AbstractResponse, GordeyevSeries, GordeyevIntegral, Gyrokinetic, GyrokineticDrift, Boltzmann, Cold, DriftKinetic
-export gordeyev, susceptibility, susceptibility_T
+export gordeyev, susceptibility, susceptibility_T, pressure_balance_cperp
 export Species, Model, nonadiabatic_response, charge_response, with_gradients
 export cyclotron_frequency, thermal_speed, thermal_gyroradius
 export AbstractFieldEquation, Quasineutrality, Poisson, residual, dispersion
