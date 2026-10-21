@@ -828,3 +828,116 @@ end
     @test_throws ArgumentError operator(g, Model((mix,), Quasineutrality()), k, ω)
     @test_throws ArgumentError eigenmode(g, Model((Species(response = Cold()),), Quasineutrality()), k, 1.0)
 end
+
+@testset "magnetic drift: quadratic average" begin
+    brute(n0, n2, a, b, e) = quadgk(s -> exp(-s^2 / 2) / sqrt(2π) * (n0 + n2 * s^2) / (a * s^2 - b * s + e),
+                                    -12, 12; rtol = 1e-12, atol = 0)[1]
+    for (a, b, e) in ((0.01, 0.02, 0.01 + 0.01im), (-0.02, 0.05, -0.03 + 0.002im),
+                      (0.05, 0.0, 0.02 + 0.02im), (0.01, 0.02, -0.04 + 0.01im))
+        @test KD.quadratic_average(0.3 + 0.1im, -0.15, a, b, e) ≈ brute(0.3 + 0.1im, -0.15, a, b, e) rtol = 1e-10
+    end
+    # a → 0 is the linear-denominator moments, without cancellation at small a
+    I0, I2 = KD.linear_moments(0.02 + 0.01im, 0.03)
+    @test KD.quadratic_average(0.3, 0.1, 1e-9, 0.03, 0.02 + 0.01im) ≈ 0.3 * I0 + 0.1 * I2 rtol = 1e-6
+    for a in (1e-12, 4e-8, 1e-7, 1e-6, -1e-6)
+        @test KD.quadratic_average(0.3 + 0.1im, -0.15, a, 0.3, 0.1 + 0.05im) ≈
+              brute(0.3 + 0.1im, -0.15, a, 0.3, 0.1 + 0.05im) rtol = 1e-12
+    end
+    # linear moments below the real axis are Z's continuation, also past the asymptotic switch |ζ| = 6
+    direct(ω, q) = (I0 = -plasma_Z(ω / (sqrt(2) * q)) / (sqrt(2) * q); (I0, (ω / q)^2 * I0 - ω / q^2))
+    for ζ in (5.999, 6.001, 9.0), arg in (-0.05π, -0.3π, -0.45π)
+        ω = sqrt(2) * 0.01 * ζ * cis(arg)
+        @test all(isapprox.(KD.linear_moments(ω, 0.01), direct(ω, 0.01); rtol = 1e-11))
+    end
+    @test KD.linear_moments(-0.1im, 0.01)[1] ≈ direct(-0.1im, 0.01)[1] rtol = 1e-12
+    # analytic across Im e = 0: complex derivatives along the real and imaginary direction agree
+    f(e) = KD.quadratic_average(0.3, 0.1, 0.01, 0.02, e)
+    for e0 in (0.02 + 0.0im, 0.03 - 0.004im, -0.01 + 0.0im)
+        h = 1e-6
+        @test (f(e0 + h) - f(e0 - h)) / 2h ≈ (f(e0 + im * h) - f(e0 - im * h)) / (2im * h) rtol = 1e-5
+    end
+end
+
+@testset "magnetic drift: local response" begin
+    ky, R0, ω = 0.5, 50.0, -0.03 + 0.01im
+    k = Wavevector(ky = ky, kz = 0.02)
+    for alpha in (0.0, 1.0)
+        s = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 1 / R0, alpha = alpha, nmu = 200))
+        # independent: direct double quadrature in (s, μ), Im ω > 0
+        W = quadgk(μ -> exp(-μ) * KD.besselj0(ky * sqrt(2μ))^2 * quadgk(v -> begin
+                ωD = -ky * (v^2 + μ) / R0
+                ωs = ky * (-0.04 + -0.16 * (μ + v^2 / 2 - 1.5))
+                exp(-v^2 / 2) / sqrt(2π) * (ω - alpha * ωD - ωs) / (ω - k.kz * v - ωD)
+            end, -12, 12; rtol = 1e-11)[1], 0, 40; rtol = 1e-9)[1]
+        @test nonadiabatic_response(s, ω, k) ≈ W rtol = 1e-6
+    end
+    # kinetic electrons: ω_D ∝ T_s/q_s, i.e. sgn(q) enters the rescaling to own units
+    e = Species(q = -1, m = 1 / 100, T = 2.0, κn = -0.04, κT = -0.16,
+                response = GyrokineticDrift(c = 0.02, cperp = 0.03, alpha = 1.0, nmu = 800))
+    ke, ωe, vt, ρ = Wavevector(ky = 0.5, kz = 0.002), 0.03 + 0.01im, sqrt(200.0), sqrt(0.02)
+    We = quadgk(μ -> exp(-μ) * KD.besselj0(ke.ky * ρ * sqrt(2μ))^2 * quadgk(v -> begin
+            ωD = 2 * ke.ky * (0.02 * v^2 + 0.03 * μ)              # -k_y (T/q)(c s² + c⊥ μ), T/q = -2
+            ωs = -2 * ke.ky * (-0.04 + -0.16 * (μ + v^2 / 2 - 1.5))
+            exp(-v^2 / 2) / sqrt(2π) * (ωe - ωD - ωs) / (ωe - ke.kz * vt * v - ωD)
+        end, -14, 14; rtol = 1e-12)[1], 0, 5, 20, 60; rtol = 1e-11)[1]
+    @test nonadiabatic_response(e, ωe, ke) ≈ We rtol = 1e-6
+    # c → 0 is Gyrokinetic
+    g = Species(κT = -0.3, response = Gyrokinetic())
+    d = Species(κT = -0.3, response = GyrokineticDrift(c = 1e-12, nmu = 32))
+    @test nonadiabatic_response(d, ω, k) ≈ nonadiabatic_response(g, ω, k) rtol = 1e-9
+    # toroidal ITG roots (R/L_T = 8, R/L_n = 2, adiabatic electrons), regression values of the snapshot b5fc4f4
+    for (alpha, ref) in ((0.0, -0.0289898331 + 0.0130943411im), (1.0, -0.0216328565 + 0.0162489625im))
+        ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, alpha = alpha, nmu = 160))
+        m = Model((ion, adiabatic_electrons()), Quasineutrality())
+        ω0 = find_modes(m, Wavevector(ky = 0.5); re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
+        @test ω0 ≈ ref atol = 1e-8
+    end
+    # electrostatic only
+    @test_throws ArgumentError dispersion(Model((Species(response = GyrokineticDrift(c = 0.02)), Species(q = -1, m = 1 / 1836)),
+                                                Darwin(beta = 0.01)), 0.1 + 0.01im, k)
+end
+
+@testset "magnetic drift: radial operator" begin
+    # c = 0 with enough μ nodes is the closed-form Gyrokinetic kernel: nonuniform N, T, all three bases
+    N, T = x -> 1 + 0.3 * sin(2π * x / 30), x -> exp(-0.4 * sin(2π * x / 30))
+    k = Wavevector(ky = 0.7, kz = 0.02)
+    el = species_profile(; q = -1, N, response = Boltzmann())
+    mw = Model((species_profile(; N, T, response = Gyrokinetic()), el), Quasineutrality())
+    mq = Model((species_profile(; N, T, response = GyrokineticDrift(c = 0.0, nmu = 128)), el), Quasineutrality())
+    for bc in (:dirichlet, :mirror, :periodic)
+        g = radial_grid(-15, 15, 40; bc)
+        Aw, Aq = operator(g, mw, k, -0.03 + 0.01im), operator(g, mq, k, -0.03 + 0.01im)
+        @test maximum(abs.(Aw - Aq)) < 1e-12 * maximum(abs.(Aw))
+    end
+    # uniform drift: the radial eigenvalue is the local root, α = 0 and 1
+    mg = radial_grid(-20, 20, 40; bc = :mirror)
+    k0 = Wavevector(ky = 0.5)
+    for alpha in (0.0, 1.0)
+        md = Model((Species(κT = -8 / 50, κn = -2 / 50, response = GyrokineticDrift(c = 1 / 50, alpha = alpha)),
+                    adiabatic_electrons()), Quasineutrality())
+        loc = find_modes(md, k0; re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
+        r = eigenmode(mg, md, k0, loc * 1.02)
+        @test r.converged
+        @test r.ω ≈ loc rtol = 1e-9
+    end
+    # A is analytic through the real axis (Im ω < 0 is the continuation)
+    md = Model((Species(κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50)), adiabatic_electrons()), Quasineutrality())
+    ω0, h = -0.0123 + 0.0im, 1e-7
+    dA_re = (operator(mg, md, k0, ω0 + h) - operator(mg, md, k0, ω0 - h)) / 2h
+    dA_im = (operator(mg, md, k0, ω0 + im * h) - operator(mg, md, k0, ω0 - im * h)) / (2im * h)
+    @test LinearAlgebra.norm(dA_re - dA_im) < 1e-4 * LinearAlgebra.norm(dA_re)
+    # profiles of the lab drift coefficient c(x) and kinetic electrons with drift: uniform limit is the local root
+    ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
+    ele = Species(q = -1, m = 1 / 400, κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
+    m2 = Model((ion, ele), Quasineutrality())
+    kk = Wavevector(ky = 0.5, kz = 0.01)
+    loc = find_modes(m2, kk; re = -0.08:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[end]
+    r = eigenmode(mg, m2, kk, loc * 1.02)
+    @test r.converged
+    @test r.ω ≈ loc rtol = 1e-8
+    sp = species_profile(; N, T, response = x -> GyrokineticDrift(c = 1 / (50 + x)))
+    @test operator(mg, Model((sp, el), Quasineutrality()), kk, -0.02 + 0.01im) isa Matrix{ComplexF64}
+    # guard: the μ nodes must agree along x
+    mix = x -> Species(response = GyrokineticDrift(c = 0.02, nmu = x < 0 ? 32 : 64))
+    @test_throws ArgumentError operator(mg, Model((mix, adiabatic_electrons()), Quasineutrality()), kk, 0.02 + 0.01im)
+end
