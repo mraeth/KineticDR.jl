@@ -12,7 +12,8 @@
 
 The defaults are the reference ion. `response` is any `AbstractResponse`: `GordeyevSeries`
 (all harmonics, or `pmax = 12` as in Maeyama), `Gyrokinetic` (p = 0), `Boltzmann` (adiabatic),
-`GordeyevIntegral` (validation), `DriftKinetic` and `Cold` (no finite Larmor radius).
+`GordeyevIntegral` (validation), `DriftKinetic` and `Cold` (no finite Larmor radius), `GyrokineticDrift`
+(`Gyrokinetic` with the magnetic drift, electrostatic).
 """
 struct Species{R<:AbstractResponse}
     q::Float64
@@ -39,8 +40,11 @@ Gordeyev sum in the species' own units (frequencies in |Ω_s|, lengths in ρ_ts)
 """
 function nonadiabatic_response(s::Species, ω, k::Wavevector)
     Ω, ks = _species_units(s, k)
-    return nonadiabatic_response(s.response, ω / Ω, ks, _drive(s, k, Ω)...)
+    return nonadiabatic_response(own_units(s.response, s), ω / Ω, ks, _drive(s, k, Ω)...)
 end
+
+"Hook: the response with any lab-unit parameters expressed in the species' own units (default: unchanged)."
+own_units(r::AbstractResponse, ::Species) = r
 
 # Gradient drive in the species' own units: ωn = ω_*s/|Ω_s|, ωT = ω_*Ts/|Ω_s|. A species without a temperature
 # (`Cold`) has none; its density gradient enters through the charge, and κT must be 0.
@@ -48,7 +52,8 @@ _drive(s::Species, k::Wavevector, Ω) = ((s.T / s.q) * k.ky * s.κn / Ω, (s.T /
 _drive(s::Species{Cold}, k::Wavevector, Ω) = (_check_cold(s); (0.0, 0.0))
 _check_cold(s) = s.κT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0 (got $(s.κT))"))
 
-# |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|.
+# |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|. Lab-unit parameters of the response itself go
+# through `own_units` (electrostatic path; no response with lab parameters has a susceptibility).
 function _species_units(s::Species, k::Wavevector)
     Ω = abs(cyclotron_frequency(s))
     ρ = thermal_gyroradius(s)
