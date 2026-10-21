@@ -5,7 +5,7 @@ Kinetic dispersion relations of a magnetised plasma. You describe the plasma as 
 
 - **local electrostatic**: full-orbit (all cyclotron harmonics), gyrokinetic, drift-kinetic, cold or Boltzmann
   species with density and temperature gradients, closed by quasineutrality or Poisson;
-- **local electromagnetic**: the same species without gradients, closed by Darwin or full Maxwell;
+- **local electromagnetic**: the same species with gradients, closed by Darwin or full Maxwell;
 - **radial**: gyrokinetic or full-orbit species with radial profiles n(x), T(x); the eigenvalue problem for φ(x).
 
 Validation studies (Raeth & Hallatschek, PRL **133**, 195101 (2024); Maeyama, Phys. Plasmas **33**,
@@ -120,12 +120,18 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
   currents of p ≠ 0 to lowest order in ω/Ω. `Boltzmann` is the ζ → 0 limit of `DriftKinetic`: an isothermal
   massless fluid along the field line, δn = −qNψ/T (E∥ = −ik∥ψ), with the E×B and the diamagnetic current. It
   lacks only the transit-time damping of δB∥, O(k⊥²ρ²).
-- **Polarisation and the density gradient.** The polarisation charge of `DriftKinetic(polarization = true)` and
-  `Cold` is Boussinesq, −w N m k⊥², and the density gradient is advected by the E×B drift only, as in the local
-  kinetic theory: the polarisation current across the gradient is dropped. So `Cold` is the T → 0 limit of
-  `GordeyevSeries` also with κn ≠ 0.
+- **Gradients.** The drive enters the current as in the electrostatic model: the Maxwellian is weighted by
+  1 − ω_*(v)/ω, so M → (1 − ωn/ω)M − (ωT/ω)(M + T∂_T M) (`susceptibility(r, ω, k, ωn, ωT)`, from
+  `susceptibility_T`). The local current misses the divergence of the current across the density gradient,
+  κn j_x, so each species adds that charge to the longitudinal row only. That row is then the full charge: its
+  electrostatic limit −k·χ·k is `charge_response` exactly, and the EM roots tend to the electrostatic ones as β → 0.
+  `Boltzmann`, the ζ → 0 limit of `DriftKinetic`, gets the same drive: its density response carries the magnetic
+  flutter across the gradient, the kinetic −(ω_*/ω)(φ − ψ).
+- **Polarisation and the density gradient.** The polarisation of `DriftKinetic(polarization = true)` and `Cold` is
+  Boussinesq: the electrostatic −w N m k⊥², not weighted by the gradient drive. The density gradient is advected by
+  the E×B drift only, as in the local kinetic theory: the polarisation current across the gradient is dropped. So
+  `Cold` is the T → 0 limit of `GordeyevSeries` also with κn ≠ 0.
 - Limits:
-  - No gradients: a species with κ ≠ 0 throws.
   - Real k only.
   - For a kinetic species with 0 < k∥ ≪ ω, Z(ζ) overflows below the real axis; use k∥ = 0 exactly for
     perpendicular propagation.
@@ -222,8 +228,11 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
 - A new **response** is a subtype of `AbstractResponse` with any of:
   - `gordeyev(r, ω, k) -> (S, S_T)` for the electrostatic path: the Gordeyev sum and its temperature
     derivative, in the species' own units (ω in |Ω_s|, k in 1/ρ_s);
-  - `susceptibility(r, ω, k)` for the electromagnetic path: the 3×3 tensor M in the frame where k⊥ ∥ x̂.
-  The `Species` methods add the gradient drive, the units, the electron sign and the rotation to (kx, ky).
+  - `susceptibility_T(r, ω, k) -> (M, T∂_T M)` for the electromagnetic path: the 3×3 tensor M in the frame where
+    k⊥ ∥ x̂ and its temperature derivative (the drive of a temperature gradient). A response without a
+    temperature defines `susceptibility(r, ω, k)` and `susceptibility(r, ω, k, ωn, ωT)` instead.
+  The `Species` methods add the gradient drive, the units, the electron sign, the rotation to (kx, ky) and the
+  gradient charge; override `KineticDR.charge_vector(::Species{R}, ω, k)` if j_x is not the E×B current.
   A fluid response without a Gordeyev sum (`Cold`) defines `charge_response(::Species{R}, ω, k)` instead of
   `gordeyev`: at the `Species` level, in lab units, with its own gradient drive. A polarisation outside the
   kinetic response comes from `polarization_weight(r, ω)` (species units), which sets both the charge
@@ -235,7 +244,6 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
 
 - Magnetic drift and toroidal terms. `GyrokineticDrift`, magnetic shear and B(x) in the radial problem
   are on the branch `radial-geometry`.
-- Gradients in the electromagnetic tensor.
 - Electromagnetic fields in the radial problem.
 - Complex k.
 

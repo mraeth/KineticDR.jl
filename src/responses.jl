@@ -158,105 +158,167 @@ function nonadiabatic_response(r::AbstractResponse, ω, k::Wavevector, ωn::Numb
 end
 
 # ── Electromagnetic responses ─────────────────────────────────────────────────────────────────
-# Interface:  susceptibility(r, ω, k) -> M (3×3), in the species' own units for positive gyration,
-# b̂ = ẑ and k = (k⊥, 0, k∥), k⊥ = kperp(k) ≥ 0. The species susceptibility is χ_s = (ω_ps²/ω²) M
-# (see `susceptibility(::Species, ω, k)`). No gradients: homogeneous background.
+# Interface:  susceptibility_T(r, ω, k) -> (M, T∂_T M), M the 3×3 tensor in the species' own units for positive
+# gyration, b̂ = ẑ and k = (k⊥, 0, k∥), k⊥ = kperp(k) ≥ 0, and T∂_T M its temperature derivative (the drive of a
+# temperature gradient). The species susceptibility is χ_s = (ω_ps²/ω²) M (see `susceptibility(::Species, ω, k)`).
+# Gradient drive: with F = N(X) F_M(v; T(X)), X the guiding centre, the Vlasov response is
+#   δf = (q/T) F (1 - ω_*(v)/ω) ∫ v'·E dτ + (a term odd in v: no current, the charge `charge_vector`),
+# ω_*(v) = ωn + ωT (v²/2 - 3/2), and v²/2 - 3/2 is T∂_T of the Maxwellian. So
+#   M(ω, k; ωn, ωT) = (1 - ωn/ω) M - (ωT/ω)(M + T∂_T M) + polarisation   (species units, ωn = ω_*/|Ω|),
+# with T∂_T M = ½ d/ds M(ω, s k) at s = 1 (k⊥ρ_t and k∥v_t scale with √T). A response without a temperature
+# (`Cold`, `Boltzmann`) defines the 3- and 5-argument `susceptibility` instead.
 
-susceptibility(r::AbstractResponse, ω, k::Wavevector) =
+"""
+    susceptibility(r, ω, k[, ωn, ωT]) -> M
+
+Susceptibility tensor of response `r` in its own units, with the gradient drive ωn = ω_*/|Ω|, ωT = ω_*T/|Ω|:
+(1 - ωn/ω) M - (ωT/ω)(M + T∂_T M) from `susceptibility_T`, plus a polarisation drift that the drive does not weight
+(`DriftKinetic(polarization = true)`).
+"""
+susceptibility(r::AbstractResponse, ω, k::Wavevector) = first(susceptibility_T(r, ω, k)) + _polarization(r, ω)
+function susceptibility(r::AbstractResponse, ω, k::Wavevector, ωn, ωT)
+    ωn == 0 && ωT == 0 && return susceptibility(r, ω, k)
+    M, MT = susceptibility_T(r, ω, k)
+    return (1 - ωn / ω) * M - (ωT / ω) * (M + MT) + _polarization(r, ω)
+end
+
+"""
+    susceptibility_T(r, ω, k) -> (M, T∂_T M)
+
+Susceptibility tensor of response `r` in its own units (frame k⊥ ∥ x̂, positive gyration) and its temperature
+derivative, which carries the drive of a temperature gradient. The electromagnetic interface of a kinetic response.
+"""
+susceptibility_T(r::AbstractResponse, ω, k::Wavevector) =
     throw(ArgumentError("$(nameof(typeof(r))) has no electromagnetic susceptibility"))
+# Polarisation drift, Boussinesq: M_xx = M_yy = ω² w (`polarization_weight`), not weighted by the gradient drive,
+# as the electrostatic -w N m k⊥².
+_polarization(r::AbstractResponse, ω) = (S = ω^2 * polarization_weight(r, ω); @SMatrix [S 0 0; 0 S 0; 0 0 0])
+
 function susceptibility(r::Cold, ω, k::Wavevector)
     S, D = ω^2 * polarization_weight(r, ω), ω / (ω^2 - 1)
     return @SMatrix [S -im*D 0; im*D S 0; 0 0 -one(S)]
 end
-
-function susceptibility(r::DriftKinetic, ω, k::Wavevector)
-    S = ω^2 * polarization_weight(r, ω)
-    b = kperp(k)^2
-    κ = abs(k.kz)
-    if κ == 0
-        A, B, P = -one(complex(ω)), zero(complex(ω)), -one(complex(ω))   # ζZ, ζZ', -ζ²Z' at |ζ| → ∞
-    else
-        ζ = ω / (sqrt(2.0) * κ)
-        Zp = -2 * one_plus_zZ(ζ)
-        A, B, P = ζ * plasma_Z(ζ), ζ * Zp, -ζ^2 * Zp
-    end
-    yz = (k.kz < 0 ? 1 : -1) * im * sqrt(b / 2) * B
-    return @SMatrix [S im*ω 0; -im*ω S+2b*A yz; 0 -yz P]
+# T = 0: no ω_*; the density gradient enters through the charge (`charge_vector`)
+function susceptibility(r::Cold, ω, k::Wavevector, ωn, ωT)
+    ωT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0"))
+    return susceptibility(r, ω, k)
 end
 
-# Stix hot-Maxwellian tensor (harmonics ns), b = k⊥², ζ_n = (ω - n)/(√2|k∥|). Elements odd in k∥
-# (xz, yz) carry sign(k∥); the series itself uses |k∥| so that Z is the Landau-continued function.
-function _tensor_series(ω, k::Wavevector, ns)
+function susceptibility_T(::DriftKinetic, ω, k::Wavevector)
     b = kperp(k)^2
     κ = abs(k.kz)
     c = zero(complex(ω))
-    xx, xy, xz, yy, yz, zz = c, c, c, c, c, c
+    if κ == 0
+        A, B, P = -one(c), c, -one(c)                        # ζZ, ζZ', -ζ²Z' at |ζ| → ∞
+        AT, BT, PT = c, c, c
+    else
+        ζ = ω / (sqrt(2.0) * κ)
+        Z = plasma_Z(ζ)
+        Zp = -2 * one_plus_zZ(ζ)
+        Zpp = -2 * (Z + ζ * Zp)
+        A, B, P = ζ * Z, ζ * Zp, -ζ^2 * Zp
+        AT, BT, PT = -(A - P) / 2, -(B + ζ^2 * Zpp) / 2, -P + ζ^3 * Zpp / 2
+    end
+    sz = (k.kz < 0 ? 1 : -1) * im * sqrt(b / 2)
+    yz, yzT = sz * B, sz * (B / 2 + BT)
+    return (@SMatrix [c im*ω 0; -im*ω 2b*A yz; 0 -yz P]), (@SMatrix [c c 0; c 2b*(A+AT) yzT; 0 -yzT PT])
+end
+
+# Stix hot-Maxwellian tensor (harmonics ns) and, for Val(true), its T-derivative, b = k⊥², ζ_n = (ω - n)/(√2|k∥|).
+# Elements odd in k∥ (xz, yz) carry sign(k∥); the series itself uses |k∥| so that Z is the Landau-continued
+# function. T∂_T acts as b → b(1 + δ), ζ → ζ(1 - δ/2).
+function _tensor_series(ω, k::Wavevector, ns, ::Val{withT}) where {withT}
+    b = kperp(k)^2
+    κ = abs(k.kz)
+    c = zero(complex(ω))
+    M = zero(SVector{6,typeof(c)})                   # xx, xy, xz, yy, yz, zz
+    MT = zero(SVector{6,typeof(c)})
+    sb, sbT = sqrt(b / 2), sqrt(b / 2) / 2
     for n in ns
-        Γ = Gamma_p(n, b)
-        dΓ = dGamma_p(n, b)
+        Γ, dΓ = Gamma_p(n, b), dGamma_p(n, b)
         Γb = b == 0 ? (abs(n) == 1 ? 0.5 : 0.0) : Γ / b          # Γ_n/b, finite at b = 0
         if κ == 0
             A, B, C = -ω / (ω - n), c, ω / (ω - n)              # ζ0 Z, ζ0 Z', ζ0 ζn Z' at |ζ| → ∞
+            AT, BT, CT = c, c, c
         else
             ζ0 = ω / (sqrt(2.0) * κ)
             ζn = (ω - n) / (sqrt(2.0) * κ)
+            Z = plasma_Z(ζn)
             Zp = -2 * one_plus_zZ(ζn)
-            A, B, C = ζ0 * plasma_Z(ζn), ζ0 * Zp, ζ0 * ζn * Zp
+            A, B, C = ζ0 * Z, ζ0 * Zp, ζ0 * ζn * Zp
+            if withT
+                Zpp = -2 * (Z + ζn * Zp)
+                AT, BT, CT = -(A + C) / 2, -(B + ζ0 * ζn * Zpp) / 2, -C - ζ0 * ζn^2 * Zpp / 2
+            end
         end
-        xx += n^2 * Γb * A
-        xy += im * n * dΓ * A
-        xz -= n * sqrt(b / 2) * Γb * B
-        yy += (n^2 * Γb - 2b * dΓ) * A
-        yz += im * sqrt(b / 2) * dΓ * B
-        zz -= Γ * C
+        M += SVector(n^2 * Γb * A, im * n * dΓ * A, -n * sb * Γb * B, (n^2 * Γb - 2b * dΓ) * A, im * sb * dΓ * B, -Γ * C)
+        if withT
+            d2Γ = d2Gamma_p(n, b)
+            ΓbT = b == 0 ? 0.0 : dΓ - Γb
+            MT += SVector(n^2 * (ΓbT * A + Γb * AT), im * n * (b * d2Γ * A + dΓ * AT), -n * ((sbT * Γb + sb * ΓbT) * B + sb * Γb * BT),
+                          (n^2 * ΓbT - 2b * dΓ - 2b^2 * d2Γ) * A + (n^2 * Γb - 2b * dΓ) * AT,
+                          im * ((sbT * dΓ + sb * b * d2Γ) * B + sb * dΓ * BT), -(b * dΓ * C + Γ * CT))
+        end
     end
+    return _tensor(M, k), _tensor(MT, k)
+end
+function _tensor(m, k::Wavevector)
     sz = k.kz < 0 ? -1 : 1
-    xz, yz = sz * xz, sz * yz
+    xx, xy, xz, yy, yz, zz = m[1], m[2], sz * m[3], m[4], sz * m[5], m[6]
     return @SMatrix [xx xy xz; -xy yy yz; xz -yz zz]
 end
 
-susceptibility(r::GordeyevSeries, ω, k::Wavevector) = _tensor_series(ω, k, _harmonics(r, kperp(k)^2))
+susceptibility_T(r::GordeyevSeries, ω, k::Wavevector) = _tensor_series(ω, k, _harmonics(r, kperp(k)^2), Val(true))
+susceptibility(r::GordeyevSeries, ω, k::Wavevector) = first(_tensor_series(ω, k, _harmonics(r, kperp(k)^2), Val(false)))
 
 # Gyrokinetic limit of the hot tensor: the p = 0 term exactly; p ≠ 0 to lowest order in ω (ω ≪ Ω, k∥v_t ≪ Ω):
 # M_xx += ω² (1 - Γ₀)/b, M_yy += ω² Σ_{p≠0} (Γ_p/b - 2b Γ_p'/p²), M_xy += -iω Γ₀' (polarisation, E×B with FLR).
 # The p ≠ 0 parts of xz, yz, zz are O(ω k∥v_t, ω²) and dropped.
-function susceptibility(::Gyrokinetic, ω, k::Wavevector)
+function susceptibility_T(::Gyrokinetic, ω, k::Wavevector)
+    M0, M0T = _tensor_series(ω, k, 0:0, Val(true))
     b = kperp(k)^2
-    P = _one_minus_Gamma0_over_b(b)
-    Y = P
+    P, PT = _one_minus_Gamma0_over_b(b)
+    Y, YT = P, PT
     for p in 1:last(_harmonics(GordeyevSeries(), b))
         Y -= 4b * dGamma_p(p, b) / p^2
+        YT -= 4(b * dGamma_p(p, b) + b^2 * d2Gamma_p(p, b)) / p^2
     end
-    X = -im * ω * dGamma_p(0, b)
-    return _tensor_series(ω, k, 0:0) + @SMatrix [ω^2*P X 0; -X ω^2*Y 0; 0 0 0]
+    Mp(P, Y, X) = @SMatrix [ω^2*P X 0; -X ω^2*Y 0; 0 0 0]
+    return M0 + Mp(P, Y, -im * ω * dGamma_p(0, b)), M0T + Mp(PT, YT, -im * ω * b * d2Gamma_p(0, b))
 end
 
-# (1 - Γ₀(b))/b, by its Taylor series below b = 0.5 where 1 - Γ₀ cancels: Γ₀ = Σ_k (-1)^k (2k)!/(k!³ 2^k) b^k
+# P = (1 - Γ₀(b))/b and b dP/db, by the Taylor series below b = 0.5 where 1 - Γ₀ cancels:
+# Γ₀ = Σ_k (-1)^k (2k)!/(k!³ 2^k) b^k
 function _one_minus_Gamma0_over_b(b)
-    b >= 0.5 && return (1 - Gamma_p(0, b)) / b
-    P, t = 0.0, 1.0                                   # t = k-th term of (1 - Γ₀)/b
+    b >= 0.5 && return (1 - Gamma_p(0, b)) / b, -dGamma_p(0, b) - (1 - Gamma_p(0, b)) / b
+    P, PT, t = 0.0, 0.0, 1.0                          # t = k-th term of (1 - Γ₀)/b
     for k in 0:60
         P += t
+        PT += k * t
         abs(t) < eps() * abs(P) && break
         t *= -b * (2k + 4) * (2k + 3) / (2 * (k + 2)^3)
     end
-    return P
+    return P, PT
 end
 
 # Boltzmann: the ζ → 0 limit of `DriftKinetic`. T b·∇δn = qN E∥, δn = -qNψ/T with E∥ = -ik∥ψ; the E×B current
 # (M_xy = iω), the diamagnetic current of δn along k⊥ × b̂ (M_yz = iω k⊥/k∥), and j∥ from continuity, k·j = ωρ
-# (M_zy = -M_yz, M_zz = ω²/k∥²). Species units; Hermitian for real ω.
-function susceptibility(::Boltzmann, ω, k::Wavevector)
+# (M_zy = -M_yz, M_zz = ω²/k∥²). Species units; Hermitian for real ω. Isothermal along the field line: T∂_T M is the
+# ζ → 0 limit of the drift-kinetic one, -ω²/k∥² in zz only, so the gradient drive weights xy, yz, zy by
+# 1 - (ωn + ωT)/ω and zz by 1 - ωn/ω (the magnetic flutter across the density gradient, the kinetic -(ω_*/ω)(φ - ψ)).
+function susceptibility_T(::Boltzmann, ω, k::Wavevector)
     k.kz == 0 && throw(ArgumentError("Boltzmann species need k∥ ≠ 0 electromagnetically (δn = -qNψ/T, E∥ = -ik∥ψ)"))
     c = zero(complex(ω))
     Y = im * ω * kperp(k) / k.kz
-    return @SMatrix [c im*ω c; -im*ω c Y; c -Y ω^2/k.kz^2]
+    Z = ω^2 / k.kz^2
+    return (@SMatrix [c im*ω c; -im*ω c Y; c -Y Z]), (@SMatrix [c c c; c c c; c c -Z])
 end
 
 # Orbit integral for a Maxwellian (validation): M = iω ∫₀^∞ e^{iωτ} ⟨v v'ᵀ e^{i k·Δx}⟩ dτ with the
 # orbit traced back by τ, v' = R(τ) v, Δx = (-sin τ v_x + (1 - cos τ) v_y, ·, -τ v_z). For a unit
 # Maxwellian ⟨v_i v_m e^{i a·v}⟩ = (δ_im - a_i a_m) e^{-|a|²/2}, a = (-k⊥ sin τ, k⊥(1 - cos τ), -k∥ τ).
-function susceptibility(r::GordeyevIntegral, ω, k::Wavevector)
+# T∂_T M from the same integrand: a Maxwellian at temperature T gives (Rᵀ - T a (Ra)ᵀ) e^{-T|a|²/2} per 1/T.
+function _orbit_integral(r::GordeyevIntegral, ω, k::Wavevector, ::Val{withT}) where {withT}
     kp = kperp(k)
     kz = k.kz
     tmax = _tmax(r, imag(ω), kz^2)
@@ -264,11 +326,20 @@ function susceptibility(r::GordeyevIntegral, ω, k::Wavevector)
         s, c = sincos(τ)
         a = SVector(-kp * s, kp * (1 - c), -kz * τ)
         R = @SMatrix [c -s 0; s c 0; 0 0 1]
-        return (transpose(R) - a * transpose(R * a)) * exp(-(a' * a) / 2 + im * ω * τ)
+        a2 = a' * a
+        e = exp(-a2 / 2 + im * ω * τ)
+        K = transpose(R) - a * transpose(R * a)
+        withT || return K * e
+        return hcat(K * e, (-a * transpose(R * a) - K * a2 / 2) * e)
     end
-    acc = zero(SMatrix{3,3,complex(typeof(float(imag(ω))))})
+    acc = zero(SMatrix{3,withT ? 6 : 3,complex(typeof(float(imag(ω))))})
     for n in 0:(ceil(Int, tmax / (2π)) - 1)
         acc += quadgk(G, 2π * n, 2π * (n + 1); rtol = 1e-13)[1]
     end
     return im * ω * acc
+end
+susceptibility(r::GordeyevIntegral, ω, k::Wavevector) = _orbit_integral(r, ω, k, Val(false))
+function susceptibility_T(r::GordeyevIntegral, ω, k::Wavevector)
+    acc = _orbit_integral(r, ω, k, Val(true))
+    return acc[:, SVector(1, 2, 3)], acc[:, SVector(4, 5, 6)]
 end
