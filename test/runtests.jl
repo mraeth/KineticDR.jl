@@ -751,36 +751,31 @@ end
         @test converges(ε -> (susceptibility(Species(κn = 0.3g, response = Cold()), ε * ω0, kc(ε)), susceptibility(dkc(g, 1e-12), ε * ω0, kc(ε))), 2; tol = 1e-6)
         # Boltzmann ← full-orbit electrons for ζ = ω/(k∥v_t) and ω_*/(k∥v_t) ~ ε (the gradient drive is non-adiabatic)
         @test converges(ε -> (charge_response(sp(Boltzmann(), g; s = ε, q = -1), ε * ω0, k0), charge_response(sp(GordeyevSeries(), g; s = ε, q = -1), ε * ω0, k0)), 1; tol = 3e-4)
-        # Boltzmann ← drift-kinetic electrons, electromagnetic, ζ, ω_* ~ ε: all elements outside the δB∥ direction (lab x for
-        # k⊥ along y; Boltzmann has no δB∥ coupling), and the density response to an inductive E∥ (magnetic flutter, δB_x ≠ 0)
+        # Boltzmann ← drift-kinetic electrons, electromagnetic, ζ, ω_* ~ ε: every element but the δB∥-δB∥ one (lab xx for k⊥
+        # along y), the transit-time damping 2b ζZ(ζ), O(k⊥²ρ²) and absent from a fluid; and the density response to an
+        # inductive E∥ (magnetic flutter, δB_x ≠ 0)
         kb = Wavevector(0.0, 0.5, 0.2)
         ωb(ε) = ε * (0.05 + 0.01im)
-        bd(r, g, ε) = susceptibility(sp(r, g; s = ε, q = -1), ωb(ε), kb)
-        @test converges(ε -> (bd(Boltzmann(), g, ε)[2:3, 2:3], bd(DriftKinetic(), g, ε)[2:3, 2:3]), 1; tol = 3e-5)
+        bd(r, g, ε) = (χ = susceptibility(sp(r, g; s = ε, q = -1), ωb(ε), kb); [χ[i] for i in 2:9])
+        @test converges(ε -> (bd(Boltzmann(), g, ε), bd(DriftKinetic(), g, ε)), 1; tol = 1e-4)
         ρind(r, ε) = (s = sp(r, g; s = ε, q = -1); kv = [kb.kx, kb.ky, kb.kz]; E = [0, 0, 1];
                       -im * transpose(kv) * susceptibility(s, ωb(ε), kb) * E + transpose(KD.charge_vector(s, ωb(ε), kb)) * E)
         @test converges(ε -> (ρind(Boltzmann(), ε), ρind(DriftKinetic(), ε)), 1; tol = 3e-5)
         # Boltzmann ← Gyrokinetic, ions and electrons, ζ, ω_* ~ ε: electrostatically at any k⊥ρ (here 0.76 for ions);
-        # electromagnetically also k⊥ρ ~ ε (the parallel response carries Γ₀), and only the elements yz, zy, zz (k⊥ along y:
-        # no δB∥ row and column, and no polarisation χ_yy, which a massless fluid lacks)
+        # electromagnetically also k⊥ρ ~ ε (the parallel response carries Γ₀), every element but the polarisation χ_xx, χ_yy
+        # of the gyrokinetic species, which a massless fluid lacks
         kbg(ε) = Wavevector(0.0, 0.5ε, 0.2)
-        par(r, q, ε) = (χ = susceptibility(sp(r, g; s = ε, q), ωb(ε), kbg(ε)); [χ[2, 3], χ[3, 2], χ[3, 3]])
+        par(r, q, ε) = (χ = susceptibility(sp(r, g; s = ε, q), ωb(ε), kbg(ε)); [χ[i, j] for i in 1:3, j in 1:3 if i != j || i == 3])
         for q in (1, -1)
             @test converges(ε -> (charge_response(sp(Boltzmann(), g; s = ε, q), ε * ω0, k0), charge_response(sp(Gyrokinetic(), g; s = ε, q), ε * ω0, k0)), 1; tol = 3e-3)
             @test converges(ε -> (par(Boltzmann(), q, ε), par(Gyrokinetic(), q, ε)), 1; tol = 5e-4)
         end
     end
-    # Cold ← full orbit, T ~ ε: converges at κ = 0; with a density gradient only after removing the drive the local kinetic
-    # theory drops, -(w - 1) q N κn k_y/ω, and in EM only in the transverse rows (the longitudinal row carries the
-    # gradient charge, `charge_vector`)
-    w = 1 / (1 - ω0^2)
-    @test converges(ε -> (charge_response(Species(response = Cold()), ω0, k0), charge_response(Species(T = ε), ω0, k0)), 1; tol = 1e-3)
-    @test relerr(charge_response(Species(κn = 0.3, response = Cold()), ω0, k0), charge_response(Species(T = 1e-3, κn = 0.3), ω0, k0)) > 0.1
-    @test converges(ε -> (charge_response(Species(κn = 0.3, response = Cold()), ω0, k0) + (w - 1) * 0.3 * k0.ky / ω0,
-                          charge_response(Species(T = ε, κn = 0.3), ω0, k0)), 1; tol = 1e-3)
-    kv = [k0.kx, k0.ky, k0.kz]
-    PT = LinearAlgebra.I - kv * kv' / (kv' * kv)
-    @test converges(ε -> (PT * susceptibility(Species(κn = 0.3, response = Cold()), ω0, k0), PT * susceptibility(Species(T = ε, κn = 0.3), ω0, k0)), 1; tol = 3e-3)
+    # Cold ← full orbit, T ~ ε, with and without a density gradient (both advect it by the E×B drift only), every element
+    for κn in (0.0, 0.3)
+        @test converges(ε -> (charge_response(Species(; κn, response = Cold()), ω0, k0), charge_response(Species(; T = ε, κn), ω0, k0)), 1; tol = 1e-3)
+        @test converges(ε -> (susceptibility(Species(; κn, response = Cold()), ω0, k0), susceptibility(Species(; T = ε, κn), ω0, k0)), 1; tol = 3e-3)
+    end
     # field equations: Maxwell → Darwin as λ² → 0 (det), and the Maxwell root → the Poisson root as β → 0 (gradients)
     mfield(f) = Model((Species(κn = 0.3, κT = -0.4), Species(q = -1, m = me, κn = 0.3, response = DriftKinetic())), f)
     @test converges(ε -> (dispersion(mfield(Maxwell(beta = 0.01, lambda2 = ε)), ω0, k0), dispersion(mfield(Darwin(beta = 0.01)), ω0, k0)), 1; tol = 1e-3)
