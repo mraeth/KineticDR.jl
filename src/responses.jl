@@ -152,7 +152,7 @@ end
 # ω_*(v) = ωn + ωT (v²/2 - 3/2), and v²/2 - 3/2 is T∂_T of the Maxwellian. So
 #   M(ω, k; ωn, ωT) = (1 - ωn/ω) M - (ωT/ω)(M + T∂_T M) + polarisation   (species units, ωn = ω_*/|Ω|),
 # with T∂_T M = ½ d/ds M(ω, s k) at s = 1 (k⊥ρ_t and k∥v_t scale with √T). A response without a temperature
-# (`Cold`, `Boltzmann`) defines the 3- and 5-argument `susceptibility` instead.
+# (`Cold`) defines the 3- and 5-argument `susceptibility` instead.
 
 """
     susceptibility(r, ω, k[, ωn, ωT]) -> M
