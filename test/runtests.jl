@@ -787,3 +787,75 @@ end
     es, = find_root(Model(itg, Poisson(lambda2 = 0.01)), ki, -0.1 + 0.05im)
     @test converges(ε -> (first(find_root(Model(itg, Maxwell(beta = ε^2, lambda2 = 0.01)), ki, es; δ = 1e-4)), es), 2; tol = 1e-6)
 end
+
+@testset "radial: species without Larmor radius (DriftKinetic, Cold)" begin
+    # uniform profiles, also with a gradient drive κn (N stays uniform): diagonal on the basis, entries the local D at
+    # k_x = k_m, every bc
+    ω, k = 0.3 + 0.02im, Wavevector(ky = 0.7, kz = 0.1)
+    for bc in (:periodic, :mirror, :dirichlet), r in (Cold(), DriftKinetic(polarization = true)), κn in (0.0, -0.3)
+        g = radial_grid(-5, 5, 16; bc)
+        m = Model((Species(T = 0.7, κn = κn, response = r), adiabatic_electrons()), Quasineutrality())
+        B = g.Cinv * operator(g, m, k, ω) * g.C
+        @test maximum(abs, B - Diagonal(diag(B))) < 1e-12
+        @test diag(B) ≈ [dispersion(m, ω, Wavevector(q, k.ky, k.kz)) for q in g.k] rtol = 1e-13
+    end
+    # radial cold = radial full-orbit kinetic (exact for guiding-centre profiles) as T → 0, with a gradient, after adding
+    # the non-E×B part of the exact cold drift v_x = w(E_y - iωE_x/Ω)/B to the drive, (w - 1) q N κn k_y/ω (resolved
+    # modes; at the grid's highest wavenumbers the kinetic orbit phase is aliased). The polarisation needs no
+    # correction: the flux form -∂x c ∂x is the T → 0 limit of the kinetic kernel.
+    L = 4π
+    n(x) = exp(0.3sin(2π * x / L))
+    g = radial_grid(0, L, 32; bc = :periodic)
+    lo = findall(q -> abs(q) < 3, g.k)
+    B(sp, ω; kk = k) = g.Cinv * operator(g, Model((sp,), Quasineutrality()), kk, ω) * g.C
+    for ω in (0.3 + 0.02im, 1.7 + 0.05im), q in (1, -1)
+        Bc = B(species_profile(; N = n, q, response = Cold()), ω)
+        Bk = B(species_profile(; N = n, q, T = x -> 1e-6, response = GordeyevSeries(pmax = 1)), ω)
+        w = 1 / (1 - ω^2)
+        drive = Diagonal([(w - 1) * q * n(x) * 0.3 * (2π / L) * cos(2π * x / L) * k.ky / ω for x in g.x])
+        Bx = Bc + g.Cinv * drive * g.C
+        @test maximum(abs, Bx[lo, lo] - Bk[lo, lo]) < 1e-5 * maximum(abs, Bx[lo, lo])
+        # charge -q at k_y = charge q at -k_y (mirror y → -y), drift-kinetic and cold
+        for r in (Cold(), DriftKinetic(polarization = true))
+            @test B(species_profile(; N = n, q, response = r), ω) ≈ B(species_profile(; N = n, q = -q, response = r), ω; kk = Wavevector(ky = -k.ky, kz = k.kz)) rtol = 1e-14
+        end
+    end
+    # drift kinetic with polarisation = radial gyrokinetic as T → 0 (O(T)), with a density gradient, every bc: the flux form
+    # (the Boussinesq -c∂x² is 1e-2 off here). A profile with c' = 0 at the walls: otherwise the two kernels' wall
+    # treatments differ on the standing-wave bases.
+    nb(x) = 1 + 0.3exp(-(x - L / 2)^2)
+    for bc in (:periodic, :dirichlet, :mirror)
+        gb = radial_grid(0, L, 32; bc)
+        lb = findall(q -> abs(q) < 3, gb.k)
+        # a profile n(x), and a uniform species with a drive κn (c' = 0: the slope of N, not κn)
+        for sp in (r -> species_profile(; N = nb, T = x -> 1e-6, response = r), r -> Species(T = 1e-6, κn = -0.3, response = r))
+            Bb(r) = gb.Cinv * operator(gb, Model((sp(r),), Quasineutrality()), k, ω) * gb.C
+            Bd, Bg = Bb(DriftKinetic(polarization = true)), Bb(Gyrokinetic())
+            @test maximum(abs, Bd[lb, lb] - Bg[lb, lb]) < 2e-5 * maximum(abs, Bd[lb, lb])
+        end
+    end
+    # end to end: drift-kinetic ions with polarisation, uniform, return the local root
+    m = Model((Species(κn = -0.3, response = DriftKinetic(polarization = true)), adiabatic_electrons()), Quasineutrality())
+    ku = Wavevector(ky = 0.5, kz = 0.05)
+    loc, ok = find_root(m, ku, 0.1 + 0.01im)
+    r = eigenmode(radial_grid(-10, 10, 16; bc = :periodic), m, ku, loc * (1 + 1e-3))
+    @test ok && r.converged
+    @test r.ω ≈ loc rtol = 1e-8
+    # the convergence scale does not grow with the resolution, and is O(1) without polarisation
+    sc(N, r) = KD.RadialWorkspace(radial_grid(-10, 10, N; bc = :periodic),
+                                  Model((Species(response = r), adiabatic_electrons()), Quasineutrality()), ku).scale
+    @test sc(16, DriftKinetic(polarization = true)) == sc(64, DriftKinetic(polarization = true))
+    @test sc(64, DriftKinetic()) == 2
+    # guards: one response at every x; a guess on a pole
+    mix = x -> Species(response = x < 2 ? Cold() : DriftKinetic())
+    @test_throws ArgumentError operator(g, Model((mix,), Quasineutrality()), k, ω)
+    @test_throws ArgumentError eigenmode(g, Model((Species(response = Cold()),), Quasineutrality()), k, 1.0)
+    @test_throws ArgumentError operator(g, Model((species_profile(; T = x -> 1 + 0.1sin(2π * x / L), response = Cold()),), Quasineutrality()), k, ω)
+    # a drift-kinetic slab ITG eigenmode on n(x), T(x) profiles converges spectrally with N (Dirichlet walls)
+    md = Model((species_profile(; N = x -> 1 + 0.2exp(-(x - 10)^2 / 8), T = x -> exp(-2tanh((x - 10) / 4)),
+                                response = DriftKinetic(polarization = true)), adiabatic_electrons()), Quasineutrality())
+    rN = [eigenmode(radial_grid(0, 20, N; bc = :dirichlet), md, Wavevector(ky = 0.5, kz = 0.02), -0.0428 + 0.0129im) for N in (16, 32, 64)]
+    @test all(r -> r.converged && imag(r.ω) > 0.01, rN)
+    @test abs(rN[3].ω - rN[2].ω) < 1e-6 * abs(rN[3].ω)
+    @test abs(rN[3].ω - rN[2].ω) < 1e-3 * abs(rN[2].ω - rN[1].ω)
+end
