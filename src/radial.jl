@@ -4,7 +4,8 @@
 #
 # Each species contributes its charge response q_s δn_s/φ = (q_s² N_s/T_s)(W_s - 1) as an operator,
 #
-#   A(ω) = Σ_s diag(a_s) - Σ_{s kinetic} Σ_{|p| ≤ P_s} ∫dμ e^{-μ} J_spμ† diag[(q_s² N_s/T_s) W_spμ(x, ω)] J_spμ  (+ field terms)
+#   A(ω) = Σ_s diag(a_s) - Σ_{s kinetic} Σ_{|p| ≤ P_s} ∫dμ e^{-μ} J_spμ† diag[(q_s² N_s/T_s) W_spμ(x, ω)] J_spμ
+#          + Σ_{s without Larmor radius} [-diag(q_s δn_s/φ at k_x = 0) + w_s(ω) X_s]  (+ field terms)
 #
 #   W_spμ = ⟨(ω - ω_*) / (ω - p|Ω_s| - k_z v∥)⟩_{v∥},
 #
@@ -19,7 +20,7 @@
 # drift (branch `radial-geometry`). N_s, T_s of a kinetic species are guiding-centre profiles, so its
 # adiabatic term is a_s = q_s² ∫F_s d³v/T_s at the particle position (`gc_average`); a `Boltzmann` species
 # has W = 0 and a_s = q_s² N_s/T_s at the node. Species without finite Larmor radius (`DriftKinetic`, `Cold`)
-# are local in x except for their polarisation charge (`PolarizationOperator`). Units as in the local model
+# are local in x except for their polarisation charge w_s X_s (`PolarizationOperator`). Units as in the local model
 # (Ω_i, ρ_i), φ in T_i/e.
 
 # A species at radius x: a `Species` is uniform, anything else is a profile x -> `Species`.
@@ -266,20 +267,22 @@ end
 
 # Species without finite Larmor radius (`DriftKinetic`, `Cold`): local in x except for the polarisation charge,
 #   A_s(ω) = -diag(charge_response(s(x_j), ω, k_x = 0)) + w_s(ω) X,   X = -∂x c ∂x = -c ∂x² - c' ∂x,  c = N m,
-# w_s = `polarization_weight`, c' = c κn from the species, ∂x and ∂x² spectral on the basis. A uniform profile gives
-# -charge_response at k_x = k_m on the basis; with a gradient X is the flux form, the ρ → 0 limit of the gyrokinetic
-# kernel (the local models' Boussinesq -c ∂x² cannot carry c' ∂x). X = nothing without polarisation (w ≡ 0).
+# w_s = `polarization_weight`, ∂x and ∂x² spectral on the basis. c' = m dN/dx is the slope of the profile N(x), not
+# the drive κn: a uniform `Species` with κn ≠ 0 has c' = 0 and gives -charge_response at k_x = k_m on the basis, and
+# for a profile X is the flux form, the ρ → 0 limit of the gyrokinetic kernel (which also takes N(x) from the profile
+# and κn only for ω_*). X = nothing without polarisation (w ≡ 0).
 struct PolarizationOperator{S} <: RadialKernel
     ss::Vector{S}
     X::Union{Nothing,Matrix{Float64}}
 end
 
-function PolarizationOperator(g::RadialGrid, ss)
+function PolarizationOperator(g::RadialGrid, ss, sp; h = 1e-4)
     check_charge_mass(ss)
     iszero(polarization_weight(ss[1].response, 0.0)) && return PolarizationOperator(ss, nothing)
     D1, D2 = derivative_matrices(g)
     c = [s.N * s.m for s in ss]
-    return PolarizationOperator(ss, -Diagonal(c) * D2 - Diagonal(c .* [s.κn for s in ss]) * D1)
+    c′ = [ss[1].m * (species_at(sp, x + h).N - species_at(sp, x - h).N) / (2h) for x in g.x]   # 0 for a `Species`
+    return PolarizationOperator(ss, -Diagonal(c) * D2 - Diagonal(c′) * D1)
 end
 
 # Spectral ∂x and ∂x² at the nodes: derivatives of the basis interpolant (cos ↔ sin for the standing waves; the
@@ -308,22 +311,23 @@ end
 adiabatic_terms(K, sp, g::RadialGrid) = [adiabatic_term(sp, x) for x in g.x]
 adiabatic_terms(::PolarizationOperator, sp, g::RadialGrid) = zeros(length(g.x))
 
-# ω-independent size of a kernel beyond its adiabatic terms (convergence test in `eigenmode`): for the species without
-# Larmor radius, the polarisation charge at k_x ~ 1 and q²N/T (none for a cold fluid)
+# ω-independent size of what a kernel adds outside `ws.diag` (convergence test in `eigenmode`): for the species without
+# Larmor radius, the polarisation charge at k_x ~ 1 and their adiabatic term q²N/T (none for a cold fluid)
 kernel_scale(K, k::Wavevector) = 0.0
 kernel_scale(L::PolarizationOperator, k::Wavevector) = maximum(s -> polarization_weight(s, 0.0) * s.N * s.m * (k.ky^2 + 1) +
                                                                     (s.response isa Cold ? 0.0 : s.q^2 * s.N / s.T), L.ss)
 
 # Radial kernel of a species, by its response (the same at every x): `nothing` for `Boltzmann` (adiabatic term only),
 # a `WeberOperator` for the kinetic responses, a `PolarizationOperator` for those without Larmor radius.
-radial_kernel(::Boltzmann, g::RadialGrid, k::Wavevector, ss) = nothing
-function radial_kernel(r::Union{Gyrokinetic,GordeyevSeries}, g::RadialGrid, k::Wavevector, ss)
+# `ss` is the species at the nodes, `sp` the profile x -> `Species` (or a uniform `Species`).
+radial_kernel(::Boltzmann, g::RadialGrid, k::Wavevector, ss, sp) = nothing
+function radial_kernel(r::Union{Gyrokinetic,GordeyevSeries}, g::RadialGrid, k::Wavevector, ss, sp)
     P = harmonics(r)
     P > 0 && g.bc !== :periodic && throw(ArgumentError("Larmor harmonics (pmax = $P > 0) need bc = :periodic"))
     return WeberOperator(g, k, ss, P)
 end
-radial_kernel(::Union{DriftKinetic,Cold}, g::RadialGrid, k::Wavevector, ss) = PolarizationOperator(g, ss)
-radial_kernel(r::AbstractResponse, g::RadialGrid, k::Wavevector, ss) = throw(ArgumentError(
+radial_kernel(::Union{DriftKinetic,Cold}, g::RadialGrid, k::Wavevector, ss, sp) = PolarizationOperator(g, ss, sp)
+radial_kernel(r::AbstractResponse, g::RadialGrid, k::Wavevector, ss, sp) = throw(ArgumentError(
     "radial kernels: Boltzmann, DriftKinetic, Cold, Gyrokinetic or GordeyevSeries(pmax = P); got $(nameof(typeof(r)))"))
 
 # What must agree along x: the response, for the kinetic ones only the cut-off (`Gyrokinetic` = `GordeyevSeries(pmax = 0)`)
@@ -351,8 +355,7 @@ struct RadialWorkspace{G,M}
 end
 
 field_operator(::Quasineutrality, g::RadialGrid, k::Wavevector) = zeros(length(g.x), length(g.x))
-field_operator(f::Poisson, g::RadialGrid, k::Wavevector) =
-    f.lambda2 .* real.(g.C * Diagonal(g.k .^ 2 .+ k.ky^2 .+ k.kz^2) * g.Cinv)
+field_operator(f::Poisson, g::RadialGrid, k::Wavevector) = f.lambda2 .* ((k.ky^2 + k.kz^2) * I - derivative_matrices(g)[2])
 field_operator(f::AbstractFieldEquation, g::RadialGrid, k::Wavevector) = throw(ArgumentError(
     "$(nameof(typeof(f))) is not implemented for the radial problem (Quasineutrality, Poisson)"))
 
@@ -368,7 +371,7 @@ function RadialWorkspace(g::RadialGrid, m::Model, k::Wavevector)
         allequal(radial_key(s.response) for s in ss) || throw(ArgumentError(
             "radial problem: a species needs the same response at every x; got $(unique(string.(getfield.(ss, :response))))"))
         g.bc === :periodic && check_periodic(g, sp)
-        K = radial_kernel(ss[1].response, g, k, ss)
+        K = radial_kernel(ss[1].response, g, k, ss, sp)
         diag .+= adiabatic_terms(K, sp, g)
         scale += kernel_scale(K, k)
         K === nothing || push!(kernels, K)
@@ -458,10 +461,9 @@ end
     eigenmode(g, m, k, ω0; tol = 1e-10, ltol = 1e-8, maxit = 60) -> (; ω, φ, λ, converged)
 
 Secant iteration on λ_min(A(ω)) = 0 from the guess `ω0`, tracking the eigenvalue closest to zero.
-`converged` needs the step below `tol |ω|` and |λ| ≤ `ltol` s, with s the ω-independent scale of A: max over x of
-the summed adiabatic terms, plus ‖field terms‖₁, plus for each species without Larmor radius its polarisation charge
-at k_x ~ 1 and q²N/T (a jump between eigenvalue branches can stall the step away from a root), and
-λ resolved: 100 eps ‖A‖₁ ≤ `ltol` s (far below the real axis ‖A‖ grows like e^{ζ²}).
+`converged` needs the step below `tol |ω|` (a jump between eigenvalue branches can stall the step away from a root),
+|λ| ≤ `ltol` s, with s the ω-independent scale of A: max over x of the summed adiabatic terms, plus ‖field terms‖₁,
+plus for each species without Larmor radius its polarisation charge at k_x ~ 1 and q²N/T, and λ resolved: 100 eps ‖A‖₁ ≤ `ltol` s (far below the real axis ‖A‖ grows like e^{ζ²}).
 It is algebraic convergence for this grid: below the real axis the discretised continuum has
 eigenvalues that move with N, so check damped modes by refining the grid. An iteration that leaves
 the region where A is finite returns `converged = false`. `φ` is a `ScalarField`, normalised to

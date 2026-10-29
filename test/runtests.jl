@@ -789,11 +789,12 @@ end
 end
 
 @testset "radial: species without Larmor radius (DriftKinetic, Cold)" begin
-    # uniform profiles: diagonal on the basis, entries the local D at k_x = k_m, every bc
+    # uniform profiles, also with a gradient drive κn (N stays uniform): diagonal on the basis, entries the local D at
+    # k_x = k_m, every bc
     ω, k = 0.3 + 0.02im, Wavevector(ky = 0.7, kz = 0.1)
-    for bc in (:periodic, :mirror, :dirichlet), r in (Cold(), DriftKinetic(polarization = true))
+    for bc in (:periodic, :mirror, :dirichlet), r in (Cold(), DriftKinetic(polarization = true)), κn in (0.0, -0.3)
         g = radial_grid(-5, 5, 16; bc)
-        m = Model((Species(T = 0.7, response = r), adiabatic_electrons()), Quasineutrality())
+        m = Model((Species(T = 0.7, κn = κn, response = r), adiabatic_electrons()), Quasineutrality())
         B = g.Cinv * operator(g, m, k, ω) * g.C
         @test maximum(abs, B - Diagonal(diag(B))) < 1e-12
         @test diag(B) ≈ [dispersion(m, ω, Wavevector(q, k.ky, k.kz)) for q in g.k] rtol = 1e-13
@@ -826,9 +827,12 @@ end
     for bc in (:periodic, :dirichlet, :mirror)
         gb = radial_grid(0, L, 32; bc)
         lb = findall(q -> abs(q) < 3, gb.k)
-        Bb(r) = gb.Cinv * operator(gb, Model((species_profile(; N = nb, T = x -> 1e-6, response = r),), Quasineutrality()), k, ω) * gb.C
-        Bd, Bg = Bb(DriftKinetic(polarization = true)), Bb(Gyrokinetic())
-        @test maximum(abs, Bd[lb, lb] - Bg[lb, lb]) < 2e-5 * maximum(abs, Bd[lb, lb])
+        # a profile n(x), and a uniform species with a drive κn (c' = 0: the slope of N, not κn)
+        for sp in (r -> species_profile(; N = nb, T = x -> 1e-6, response = r), r -> Species(T = 1e-6, κn = -0.3, response = r))
+            Bb(r) = gb.Cinv * operator(gb, Model((sp(r),), Quasineutrality()), k, ω) * gb.C
+            Bd, Bg = Bb(DriftKinetic(polarization = true)), Bb(Gyrokinetic())
+            @test maximum(abs, Bd[lb, lb] - Bg[lb, lb]) < 2e-5 * maximum(abs, Bd[lb, lb])
+        end
     end
     # end to end: drift-kinetic ions with polarisation, uniform, return the local root
     m = Model((Species(κn = -0.3, response = DriftKinetic(polarization = true)), adiabatic_electrons()), Quasineutrality())
