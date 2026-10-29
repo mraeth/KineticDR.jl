@@ -39,10 +39,14 @@ Gordeyev sum in the species' own units (frequencies in |Ω_s|, lengths in ρ_ts)
 """
 function nonadiabatic_response(s::Species, ω, k::Wavevector)
     Ω, ks = _species_units(s, k)
-    ωn = (s.T / s.q) * k.ky * s.κn / Ω                           # ω_*s / |Ω_s|
-    ωT = (s.T / s.q) * k.ky * s.κT / Ω                           # ω_*Ts / |Ω_s|
-    return nonadiabatic_response(s.response, ω / Ω, ks, ωn, ωT)
+    return nonadiabatic_response(s.response, ω / Ω, ks, _drive(s, k, Ω)...)
 end
+
+# Gradient drive in the species' own units: ωn = ω_*s/|Ω_s|, ωT = ω_*Ts/|Ω_s|. A species without a temperature
+# (`Cold`) has none; its density gradient enters through the charge, and κT must be 0.
+_drive(s::Species, k::Wavevector, Ω) = ((s.T / s.q) * k.ky * s.κn / Ω, (s.T / s.q) * k.ky * s.κT / Ω)
+_drive(s::Species{Cold}, k::Wavevector, Ω) = (_check_cold(s); (0.0, 0.0))
+_check_cold(s) = s.κT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0 (got $(s.κT))"))
 
 # |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|.
 function _species_units(s::Species, k::Wavevector)
@@ -54,23 +58,37 @@ end
 """
     susceptibility(s, ω, k) -> χ̃_s (3×3)
 
-Susceptibility of species `s` in units of ω_pi²/Ω_i², b̂ = ẑ, any k⊥ = (kx, ky):
-χ̃_s = (q² N/m)/ω² · R M Rᵀ, with M = `susceptibility(s.response, ω/|Ω_s|, k)` in the species' units
-in the frame where k⊥ lies along x, and R the rotation about ẑ back to (kx, ky). Negative charge
-(opposite gyration) is the mirror image y → -y in that frame. Homogeneous background only: gradients throw.
+Susceptibility of species `s` in units of ω_pi²/Ω_i² (current j = -iω χ̃ E), b̂ = ẑ, any k⊥ = (kx, ky):
+χ̃_s = (q² N/m)/ω² · R M Rᵀ + i k gᵀ/k², with M = `susceptibility(s.response, ω/|Ω_s|, k, ωn, ωT)` in the species'
+units in the frame where k⊥ lies along x (gradient drive ωn, ωT along y of the lab), and R the rotation about ẑ back
+to (kx, ky). Negative charge (opposite gyration) is the mirror image y → -y in that frame.
+The second term only acts on the longitudinal row: it is the charge g·E that the local current misses, the
+divergence of the current across the density gradient (`charge_vector`), so that the longitudinal row is the full
+charge, -i k·χ̃ E + g·E = ρ (the electrostatic `charge_response`).
 """
 function susceptibility(s::Species, ω, k::Wavevector)
-    (s.κn == 0 && s.κT == 0) ||
-        throw(ArgumentError("electromagnetic responses have no gradient drive; species has κn = $(s.κn), κT = $(s.κT)"))
     Ω, ks = _species_units(s, k)
-    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz))
+    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz), _drive(s, k, Ω)...)
     fy = s.q < 0 ? -1 : 1                                         # mirror y -> -y
     F = SVector(1, fy, 1)
     kp = kperp(k)
     c, sn = kp == 0 ? (1.0, 0.0) : (k.kx / kp, k.ky / kp)
     R = @SMatrix [c -sn 0; sn c 0; 0 0 1]
-    return (s.q^2 * s.N / s.m) / ω^2 * (R * (F .* M .* transpose(F)) * transpose(R))
+    χ = (s.q^2 * s.N / s.m) / ω^2 * (R * (F .* M .* transpose(F)) * transpose(R))
+    s.κn == 0 && return χ
+    kv = SVector(k.kx, k.ky, k.kz)
+    return χ + im * kv * transpose(charge_vector(s, ω, k)) / (kv' * kv)
 end
+
+"""
+    charge_vector(s, ω, k) -> g
+
+Charge g·E that the local current j misses (lab frame): ∇·j = ik·j + κn j_x for a current ∝ N(x), so
+ρ = (k·j - iκn j_x)/ω. j_x is the E×B current qN E_y for every response (the local kinetic theory); the
+polarisation current across the gradient is dropped (Boussinesq). A response whose j_x is something else overrides
+this for `Species{R}`.
+"""
+charge_vector(s::Species, ω, k::Wavevector) = SVector(0, -im * s.q * s.N * s.κn / ω, 0)
 
 """
     charge_response(s, ω, k) -> q_s δn_s/φ
@@ -82,7 +100,7 @@ A response without a Gordeyev sum overrides this method for `Species{R}` (lab un
 charge_response(s::Species, ω, k::Wavevector) =
     s.q^2 * s.N / s.T * (nonadiabatic_response(s, ω, k) - 1) - polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
 function charge_response(s::Species{Cold}, ω, k::Wavevector)
-    s.κT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0 (got $(s.κT))"))
+    _check_cold(s)
     return -polarization_weight(s, ω) * s.N * s.m * kperp(k)^2 - s.q * s.N * s.κn * k.ky / ω + s.q^2 * s.N / s.m * k.kz^2 / ω^2
 end
 
