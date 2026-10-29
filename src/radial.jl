@@ -360,10 +360,10 @@ kernel_scale(L::PolarizationOperator, k::Wavevector) = maximum(s -> polarization
 # `ss` is the species at the nodes, `sp` the profile x -> `Species` (or a uniform `Species`).
 radial_kernel(::Boltzmann, g::RadialGrid, k::Wavevector, ss, sp) = nothing
 function radial_kernel(r::Union{Gyrokinetic,GordeyevSeries}, g::RadialGrid, k::Wavevector, ss, sp)
-    if any(s -> s.response isa Gyrokinetic && hasdrift(s.response), ss, sp)         # drift at some x: μ quadrature everywhere
-        all(s -> s.response isa Gyrokinetic && s.response.mu == ss[1].response.mu, ss, sp) || throw(ArgumentError(
+    if any(s -> s.response isa Gyrokinetic && hasdrift(s.response), ss)         # drift at some x: μ quadrature everywhere
+        all(s -> s.response isa Gyrokinetic && s.response.mu == ss[1].response.mu, ss) || throw(ArgumentError(
             "radial problem: Gyrokinetic with a magnetic drift needs Gyrokinetic with the same nmu at every x"))
-        return QuadratureOperator(g, k, ss, sp)
+        return QuadratureOperator(g, k, ss)
     end
     P = harmonics(r)
     P > 0 && g.bc !== :periodic && throw(ArgumentError("Larmor harmonics (pmax = $P > 0) need bc = :periodic"))

@@ -997,7 +997,7 @@ end
     # a drift profile through zero: the quadrature everywhere, and at c ≡ 0 it is the exact kernel
     cz = Model((species_profile(; N, T, response = x -> Gyrokinetic(c = 0.02 * max(x, 0) / 20, nmu = 128)), el), Quasineutrality())
     @test operator(mg, cz, kk, -0.02 + 0.01im) isa Matrix{ComplexF64}
-    @test KD.radial_kernel(Gyrokinetic(), mg, kk, [Species(response = Gyrokinetic()) for _ in mg.x]) isa KD.WeberOperator
+    @test KD.radial_kernel(Gyrokinetic(), mg, kk, [Species(response = Gyrokinetic()) for _ in mg.x], Species(response = Gyrokinetic())) isa KD.WeberOperator
     # the exact path ignores nmu and alpha; the drift path has no Gordeyev sum
     @test nonadiabatic_response(Species(κT = -0.3, response = Gyrokinetic(nmu = 8, alpha = 1.0)), 0.02 + 0.01im, kk) ==
           nonadiabatic_response(Species(κT = -0.3, response = Gyrokinetic()), 0.02 + 0.01im, kk)
