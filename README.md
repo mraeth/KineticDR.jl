@@ -56,8 +56,7 @@ Which response works with which model:
 |---|---|:-:|:-:|:-:|
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | (not planned) |
-| `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω | ✓ | ✓ | ✓ |
-| `GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 128)` | `Gyrokinetic` with the magnetic drift ω_D (toroidal ITG, ∇B) | ✓ | ✓ (`alpha = 0`) | ✓ |
+| `Gyrokinetic(; c = 0, cperp = c, prescribed = false, nmu = 128)` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω. `c`, `cperp`: magnetic drift (toroidal ITG, ∇B), μ by quadrature | ✓ | ✓ (drift: `prescribed = false`) | ✓ |
 | `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
 | `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | ✓ |
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
@@ -99,11 +98,13 @@ neutral_gradients(model, 1.05, k)                      # (κn, κT) that put a r
 with_gradients(model; κn = 0.1, κT = 0.5)              # the same model with other gradients
 ```
 
-Toroidal ITG: `GyrokineticDrift` adds the curvature and ∇B drift ω_D = −k_y (T/q)(c v∥²/v_t² + c⊥ μ),
-c = 1/(BR) in 1/ρ_i (c > 0 is bad curvature, ω_D along the ion diamagnetic direction for κ < 0):
+Toroidal ITG: `Gyrokinetic(c = …, cperp = …)` adds the curvature drift (`c`, ∝ v∥²) and the ∇B drift (`cperp`, ∝ μ),
+ω_D = −k_y (T/q)(c v∥²/v_t² + c⊥ μ), c = c⊥ = 1/(BR) in 1/ρ_i for a low-β torus (c > 0 is bad curvature, ω_D along
+the ion diamagnetic direction for κ < 0). Without drift (the default) both velocity integrals are exact; with drift μ
+becomes a quadrature, so the two settings differ numerically:
 
 ```julia
-ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50))      # R = 50 ρ_i, R/L_T = 8
+ion = Species(κn = -2 / 50, κT = -8 / 50, response = Gyrokinetic(c = 1 / 50))      # R = 50 ρ_i, R/L_T = 8
 find_modes(Model((ion, Species(q = -1, response = Boltzmann())), Quasineutrality()), Wavevector(ky = 0.5);
            re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)                 # -0.02899 + 0.01309i
 ```
@@ -114,8 +115,8 @@ find_modes(Model((ion, Species(q = -1, response = Boltzmann())), Quasineutrality
   and at large k⊥ρ the oscillation of J₀² needs `nmu` ≳ (k⊥ρ_s)² (at k⊥ρ_s = 10: 64 nodes 15% off `Gyrokinetic`, 128 exact).
 - Below the real axis the quadrature turns the continuum of drift resonances into `nmu` cuts at real
   ω = k_z² v_t²/(4 k_y τ c) − k_y τ c⊥ μ_k (τ = T/q): damped drift modes there depend on `nmu`. Trust Im ω > 0, converge `nmu` otherwise.
-- `alpha = 1` puts ω_D in the drive numerator as well (bslLD's prescribed drift, which does no work against E);
-  `alpha = 0` is gyrokinetic. `alpha = 1` is electrostatic only.
+- `prescribed = true` puts ω_D in the drive numerator as well (bslLD's prescribed drift, which does no work against
+  E); `false` (the default) is gyrokinetic. `prescribed = true` is electrostatic only.
 - **Equilibrium ∇B.** c⊥ = −∂x ln B. A slab in pressure balance has c = 0 and
   c⊥ = `pressure_balance_cperp(species, β)` = (β/2) Σ_s N_s T_s (κn_s + κT_s), a ∇B along −∇p (good-curvature-like
   drift); pass the same β to the field. The diamagnetic drive is the gradient at fixed energy (flux-tube convention):
@@ -130,7 +131,7 @@ find_modes(Model((ion, Species(q = -1, response = Boltzmann())), Quasineutrality
 ```julia
 β, g = 0.05, (κn = -0.05, κT = -0.5)
 cp = pressure_balance_cperp((Species(; g...), Species(; q = -1, g...)), β)   # slab in pressure balance: -0.0275
-gb = GyrokineticDrift(c = 0, cperp = cp)
+gb = Gyrokinetic(c = 0, cperp = cp)
 m = Model((Species(; g..., response = gb), Species(; q = -1, m = 1 / 1836, g..., response = gb)), Darwin(beta = β))
 find_modes(m, Wavevector(ky = 0.5, kz = 0.02); re = -0.3:0.03:0.3, imag = (0.02, 0.1))
 ```
@@ -234,9 +235,10 @@ r = find_eigenmode(g, m, k; re = 1.0:0.02:1.1, imag = 0.001:0.002:0.011, starts 
   of that profile (ions). Negative charges rest on the mirror symmetry y → −y (charge −q at k_y = charge q at
   −k_y), which the tests check, plus the uniform-profile limit; there is no exact non-uniform electron reference.
   `Gyrokinetic` and `GordeyevSeries(pmax = 0)` are the same kernel.
-- **Magnetic drift.** `GyrokineticDrift` species take the response's `nmu` Gauss–Laguerre nodes in μ instead of
-  Weber's integral (W is no longer affine in μ), with one gyroaverage matrix per node; c, c⊥ and α may depend on x
-  (`response = x -> GyrokineticDrift(c = 1 / (R0 + x))`), `nmu` may not. The quadrature under-resolves the
+- **Magnetic drift.** A `Gyrokinetic` species with a drift anywhere on the grid takes the response's `nmu`
+  Gauss–Laguerre nodes in μ instead of Weber's integral (W is no longer affine in μ), with one gyroaverage matrix per
+  node, at every x; c, c⊥ and `prescribed` may depend on x and vanish somewhere (`response = x -> Gyrokinetic(c = 1 / (R0 + x))`),
+  `nmu` may not. Without drift at every x the exact Weber kernel is used. The quadrature under-resolves the
   high-k_x columns of A (‖ΔA‖/‖A‖ = 3% at k_y = 0.5, 40% at k_y = 5 for 64 nodes, N = 128), which localised
   modes hardly feel: converge `nmu` as well as N. B = 1 and k∥ = k_z everywhere still: c is a prescribed drift,
   not a field-line geometry.
@@ -298,7 +300,7 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
 
 ## Not implemented
 
-- Magnetic drift in the full-orbit and drift-kinetic responses (only `GyrokineticDrift`), and in the radial EM problem.
+- Magnetic drift in the full-orbit and drift-kinetic responses (only `Gyrokinetic`), and in the radial EM problem.
 - Magnetic shear, B(x) and a consistent equilibrium ∇B in the radial problem.
 - Electromagnetic fields in the radial problem.
 - Complex k.
@@ -311,7 +313,7 @@ src/special.jl     plasma Z function, Γ_p = I_p e^{-x}
 src/types.jl       Wavevector, abstract types
 src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral, Cold, DriftKinetic
 src/species.jl     Species, Model, charge_response, susceptibility, with_gradients
-src/drift.jl       GyrokineticDrift (electrostatic and electromagnetic), polynomial_average (v∥ average with drift),
+src/drift.jl       Gyrokinetic (with optional drift; electrostatic and electromagnetic), polynomial_average (v∥ average),
                    pressure_balance_cperp, Gauss–Laguerre nodes
 src/fields.jl      Quasineutrality, Poisson, Darwin, Maxwell, dispersion, dispersion_matrix
 src/solve.jl       root finders and gradient scans

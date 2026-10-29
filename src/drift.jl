@@ -1,7 +1,7 @@
-# Gyrokinetic response with a magnetic drift. The v∥ average of the resonant denominator is
+# Gyrokinetic response, optionally with a magnetic drift. The v∥ average of the resonant denominator is
 # exact (two Z functions) for any Im ω; v⊥ enters through the magnetic moment μ = v⊥²/(2T/m).
 # The μ quadrature is not: below the real axis it replaces the drift-resonance cut of the μ integral
-# by `nmu` cuts (see [`GyrokineticDrift`](@ref)).
+# by `nmu` cuts (see [`Gyrokinetic`](@ref)).
 
 """
     polynomial_average(n, a, b, e) -> ⟨(n₀ + n₁ s + … + n₆ s⁶) / (a s² - b s + e)⟩_s,  s ~ N(0, 1)
@@ -87,69 +87,29 @@ function gauss_laguerre(n::Integer)
     return E.values, E.vectors[1, :] .^ 2
 end
 
-"""
-    GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 128)
-
-Gyrokinetic response (J₀², no cyclotron harmonics) with the magnetic drift
-ω_D = -k_y (T_s/q_s) (c v∥²/v_ts² + c⊥ μ), c = 1/(B R) for curvature and ∇B (`c`, `cperp` in 1/ρ_i,
-B = 1 units). `alpha` multiplies ω_D in the drive numerator: 0 is gyrokinetic, 1 is bslLD's
-prescribed drift (the drift does no work against E). v⊥ by `nmu`-point Gauss–Laguerre in μ.
-`c = cperp = 0` is `Gyrokinetic` up to the μ quadrature, electrostatic and electromagnetic; the quadrature must resolve
-the oscillation of J₀²(k⊥ρ√(2μ)): `nmu` ≳ (k⊥ρ_s)². At k⊥ρ_s = 10, 64 nodes are 15% off `Gyrokinetic`, the default
-128 agree to 1e-14.
-
-Signs: the ∇B drift of a slab with B(x) is ω = k_y (T/q) μ ∂x ln B, so c⊥ = -∂x ln B; an equilibrium in
-pressure balance has c⊥ = `pressure_balance_cperp(species, β)` and c = 0 (no curvature). Bad curvature of a torus
-(outboard midplane, x outward) is c = c⊥ = 1/R > 0. The diamagnetic drive keeps the gradient of F at fixed
-energy, as in flux-tube gyrokinetics: ∇B enters only through ω_D.
-
-Electromagnetic: the p = 0 term of the hot tensor with the drift in its denominator, per μ node
-with the gyrocentre drift current, plus the lowest-order polarisation and E×B of `Gyrokinetic`, which the drift does
-not change at this order. The gradient drive is in the integrand (ω - ω_*(v)). `alpha ≠ 0` is electrostatic only.
-
-The μ integrand has a pole at ω + k_y c⊥ μ ≈ 0, i.e. a distance ~|ω/(k_y c⊥)| from the real axis, which
-Gauss–Laguerre resolves only geometrically: for k_y c = 0.01, ω = -0.03 + 0.01i the relative error of the
-response is 1e-3 (nmu = 24), 2e-4 (40), 1.4e-5 (80), 3e-7 (160), 1e-9 (320). Check `nmu` for ω_D ~ ω.
-
-Below the real axis: each node μ_k has a branch point at real ω = k_z² v_t²/(4 k_y τ c) - k_y τ c⊥ μ_k
-(lab units, τ = T_s/q_s) with its cut
-hanging down, so the μ integral's continuum of drift resonances becomes `nmu` cuts. For Im ω < 0 with Re ω
-in the range of these points the response is a quadrature artefact (depends on `nmu`), not the continuation
-of the μ integral. Trust Im ω > 0; check `nmu` convergence for damped drift modes.
-"""
-struct GyrokineticDrift <: AbstractResponse
-    c::Float64
-    cperp::Float64
-    alpha::Float64
-    mu::Vector{Float64}
-    wmu::Vector{Float64}
-end
-function GyrokineticDrift(; c, cperp = c, alpha = 0.0, nmu = 128)
-    mu, wmu = gauss_laguerre(nmu)
-    return GyrokineticDrift(float(c), float(cperp), float(alpha), mu, wmu)
-end
-
-gordeyev(::GyrokineticDrift, args...) =
-    throw(ArgumentError("GyrokineticDrift has no Gordeyev sum; use nonadiabatic_response"))
-
 # Own units (|Ω_s| = ρ_ts = v_ts = 1): ω_D = -k_y (c s² + c⊥ μ), `c` already the species' own c. The v∥ average at
-# one μ, W_μ = ⟨(ω - α ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩, shared by the local response and the radial kernel.
-function drift_vpar(r::GyrokineticDrift, ω, k::Wavevector, ωn, ωT, μ)
+# one μ, W_μ = ⟨(ω - [prescribed] ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩, shared by the local response and the radial kernel.
+function drift_vpar(r::Gyrokinetic, ω, k::Wavevector, ωn, ωT, μ)
     a = k.ky * r.c
-    n0 = ω - ωn - ωT * (μ - 1.5) + r.alpha * k.ky * r.cperp * μ
-    n2 = -ωT / 2 + r.alpha * a
+    n0 = ω - ωn - ωT * (μ - 1.5) + r.prescribed * k.ky * r.cperp * μ
+    n2 = -ωT / 2 + r.prescribed * a
     return quadratic_average(n0, n2, a, abs(k.kz), ω + k.ky * r.cperp * μ)
 end
 
-function nonadiabatic_response(r::GyrokineticDrift, ω, k::Wavevector, ωn::Number, ωT::Number)
+function nonadiabatic_response(r::Gyrokinetic, ω, k::Wavevector, ωn::Number, ωT::Number)
+    if !hasdrift(r)                                   # exact: the p = 0 Gordeyev term
+        S, ST = gordeyev(r, ω, k)
+        return -ω * S + ωT * ST + ωn * S
+    end
     kp = kperp(k)
     return sum(w * besselj0(kp * sqrt(2μ))^2 * drift_vpar(r, ω, k, ωn, ωT, μ) for (μ, w) in zip(r.mu, r.wmu))
 end
 
 # ω_D/|Ω_s| = -k_y,s sgn(q_s) ρ_ts (c s² + c⊥ μ): c is a lab quantity, rescale to the species' units.
-function own_units(r::GyrokineticDrift, s::Species)
+function own_units(r::Gyrokinetic, s::Species)
+    hasdrift(r) || return r
     f = sign(s.q) * thermal_gyroradius(s)
-    return GyrokineticDrift(r.c * f, r.cperp * f, r.alpha, r.mu, r.wmu)
+    return Gyrokinetic(r.c * f, r.cperp * f, r.prescribed, r.mu, r.wmu)
 end
 
 # Electromagnetic: frame k⊥ ∥ x̂ (own units, positive gyration), `u` the lab ŷ (the direction of ∇B × b̂ and of the drift)
@@ -159,10 +119,11 @@ end
 # Coulomb-gauge φ = i k·E/k²:
 #   M = -∫ (ω - ω_*) [V V₀†/D + J₀² v_D kᵀ/k² + J₀ ω_D V kᵀ/(D k²)]
 # (ω_*(v) the drive at fixed energy). For v_D = 0 it is Stix's p = 0 term; k·V = J₀(k∥s + ω_D) closes continuity, so
-# the longitudinal row is the electrostatic `GyrokineticDrift` charge. The parallel row is the gyrokinetic j∥, the ŷ row
+# the longitudinal row is the electrostatic `Gyrokinetic` charge with drift. The parallel row is the gyrokinetic j∥, the ŷ row
 # the δB∥ equation up to O(ω/Ω, ρ/L). Plus the lowest-order polarisation and E×B of `Gyrokinetic` (`Mp`).
-function species_susceptibility(r::GyrokineticDrift, ω, k::Wavevector, ωn, ωT, u)
-    r.alpha == 0 || throw(ArgumentError("GyrokineticDrift: alpha ≠ 0 (prescribed drift) is electrostatic only"))
+function species_susceptibility(r::Gyrokinetic, ω, k::Wavevector, ωn, ωT, u)
+    hasdrift(r) || return susceptibility(r, ω, k, ωn, ωT)       # exact p = 0 tensor
+    r.prescribed && throw(ArgumentError("Gyrokinetic: the prescribed drift (prescribed = true) is electrostatic only"))
     b = kperp(k)^2
     ky = sqrt(b) * u[1]                                   # lab k_y in own units
     kv = SVector(sqrt(b), 0.0, k.kz)
@@ -190,9 +151,6 @@ function species_susceptibility(r::GyrokineticDrift, ω, k::Wavevector, ωn, ωT
     Mp, MpT = _gyrokinetic_polarization_T(ω, k)
     return M + (1 - ωn / ω) * Mp - (ωT / ω) * (Mp + MpT)
 end
-susceptibility(r::GyrokineticDrift, ω, k::Wavevector, ωn, ωT) =
-    throw(ArgumentError("GyrokineticDrift needs the lab k_y: use susceptibility(species, ω, k)"))
-susceptibility(r::GyrokineticDrift, ω, k::Wavevector) = susceptibility(r, ω, k, 0, 0)
 
 # product of polynomials in s given as coefficient tuples
 _polymul(p, q) = ntuple(n -> sum(p[i] * q[n - i + 1] for i in max(1, n - length(q) + 1):min(n, length(p))), length(p) + length(q) - 1)
@@ -200,7 +158,7 @@ _polymul(p, q) = ntuple(n -> sum(p[i] * q[n - i + 1] for i in max(1, n - length(
 """
     pressure_balance_cperp(species, beta) -> c⊥
 
-∇B coefficient of `GyrokineticDrift` for a slab in pressure balance, B²/2μ₀ + Σ_s p_s = const:
+∇B coefficient of `Gyrokinetic` for a slab in pressure balance, B²/2μ₀ + Σ_s p_s = const:
 ∂x ln B = -(β/2) Σ_s N_s T_s (κn_s + κT_s) (units N_i T_i, β = 2μ₀ N_i T_i/B²), so c⊥ = -∂x ln B =
 (β/2) Σ_s N_s T_s (κn_s + κT_s). Use it with `c = 0` (no curvature) and the same β as the field.
 """

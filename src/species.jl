@@ -12,8 +12,8 @@
 
 The defaults are the reference ion. `response` is any `AbstractResponse`: `GordeyevSeries`
 (all harmonics, or `pmax = 12` as in Maeyama), `Gyrokinetic` (p = 0), `Boltzmann` (adiabatic),
-`GordeyevIntegral` (validation), `DriftKinetic` and `Cold` (no finite Larmor radius), `GyrokineticDrift`
-(`Gyrokinetic` with the magnetic drift, electrostatic).
+`GordeyevIntegral` (validation), `DriftKinetic` and `Cold` (no finite Larmor radius); `Gyrokinetic(c = …)` adds
+the magnetic drift.
 """
 struct Species{R<:AbstractResponse}
     q::Float64

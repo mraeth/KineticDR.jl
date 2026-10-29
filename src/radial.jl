@@ -16,8 +16,8 @@
 # ω_* = (T_s/q_s) k_y (κn + κT(μ + s²/2 - 3/2)) with κ = +d ln/dx (as everywhere in KineticDR), s = v∥/v_ts.
 # Both integrals are exact: the v∥ average is two Z functions (any Im ω), and W is affine in μ, so the μ
 # integral is Weber's second integral (`weber`). With guiding-centre profiles (below) the operator is exact
-# up to the cut-off P (checked against `exponential_dispersion`). `GyrokineticDrift` adds the magnetic drift
-# ω_D = -k_y (T_s/q_s)(c s² + c⊥ μ) to the p = 0 denominator, W = ⟨(ω - α ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩: the v∥ average
+# up to the cut-off P (checked against `exponential_dispersion`). `Gyrokinetic(c = …)` adds the magnetic drift
+# ω_D = -k_y (T_s/q_s)(c s² + c⊥ μ) to the p = 0 denominator, W = ⟨(ω - [prescribed] ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩: the v∥ average
 # is still exact (`quadratic_average`), the μ integral is the response's Gauss–Laguerre quadrature
 # (`QuadratureOperator`). N_s, T_s of a kinetic species are guiding-centre profiles, so its
 # adiabatic term is a_s = q_s² ∫F_s d³v/T_s at the particle position (`gc_average`); a `Boltzmann` species
@@ -178,8 +178,8 @@ function radial_field(g::RadialGrid, φ::AbstractVector)
     return ScalarField(g.bc === :dirichlet ? vcat(zero(eltype(φ)), φ) : Vector(φ))
 end
 
-# With the magnetic drift (p = 0): the local `drift_vpar` in the species' own units.
-function vpar_response(k::Wavevector, s::Species{GyrokineticDrift}, ω, mu)
+# With the magnetic drift (p = 0, `Gyrokinetic` with drift): the local `drift_vpar` in the species' own units.
+function vpar_response(k::Wavevector, s::Species{Gyrokinetic}, ω, mu)
     Ω, ks = _species_units(s, k)
     return drift_vpar(own_units(s.response, s), ω / Ω, ks, _drive(s, k, Ω)..., mu)
 end
@@ -360,20 +360,23 @@ kernel_scale(L::PolarizationOperator, k::Wavevector) = maximum(s -> polarization
 # `ss` is the species at the nodes, `sp` the profile x -> `Species` (or a uniform `Species`).
 radial_kernel(::Boltzmann, g::RadialGrid, k::Wavevector, ss, sp) = nothing
 function radial_kernel(r::Union{Gyrokinetic,GordeyevSeries}, g::RadialGrid, k::Wavevector, ss, sp)
+    if any(s -> s.response isa Gyrokinetic && hasdrift(s.response), ss)         # drift at some x: μ quadrature everywhere
+        all(s -> s.response isa Gyrokinetic && s.response.mu == ss[1].response.mu, ss) || throw(ArgumentError(
+            "radial problem: Gyrokinetic with a magnetic drift needs Gyrokinetic with the same nmu at every x"))
+        return QuadratureOperator(g, k, ss)
+    end
     P = harmonics(r)
     P > 0 && g.bc !== :periodic && throw(ArgumentError("Larmor harmonics (pmax = $P > 0) need bc = :periodic"))
     return WeberOperator(g, k, ss, P)
 end
-radial_kernel(::GyrokineticDrift, g::RadialGrid, k::Wavevector, ss, sp) = QuadratureOperator(g, k, ss)
 radial_kernel(::Union{DriftKinetic,Cold}, g::RadialGrid, k::Wavevector, ss, sp) = PolarizationOperator(g, ss, sp)
 radial_kernel(r::AbstractResponse, g::RadialGrid, k::Wavevector, ss, sp) = throw(ArgumentError(
-    "radial kernels: Boltzmann, DriftKinetic, Cold, Gyrokinetic, GyrokineticDrift or GordeyevSeries(pmax = P); got $(nameof(typeof(r)))"))
+    "radial kernels: Boltzmann, DriftKinetic, Cold, Gyrokinetic or GordeyevSeries(pmax = P); got $(nameof(typeof(r)))"))
 
-# What must agree along x: the response, for the kinetic ones only the cut-off (`Gyrokinetic` = `GordeyevSeries(pmax = 0)`),
-# with drift the μ nodes (c, c⊥, α may vary)
+# What must agree along x: the response, for the kinetic ones only the cut-off (`Gyrokinetic` = `GordeyevSeries(pmax = 0)`;
+# the drift coefficients c, c⊥ and `prescribed` may vary, `radial_kernel` checks the μ nodes)
 radial_key(r::AbstractResponse) = r
 radial_key(r::Union{Gyrokinetic,GordeyevSeries}) = harmonics(r)
-radial_key(r::GyrokineticDrift) = (GyrokineticDrift, r.mu)
 
 # Real frequencies at which a kernel's response has a pole (the `eigenmode` guess must avoid them)
 # With drift the real singular points are a continuum of branch points (one per μ node, any k_z): none to exclude
