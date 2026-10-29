@@ -88,11 +88,11 @@ function gauss_laguerre(n::Integer)
 end
 
 # Own units (|Ω_s| = ρ_ts = v_ts = 1): ω_D = -k_y (c s² + c⊥ μ), `c` already the species' own c. The v∥ average at
-# one μ, W_μ = ⟨(ω - α ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩, shared by the local response and the radial kernel.
+# one μ, W_μ = ⟨(ω - [prescribed] ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩, shared by the local response and the radial kernel.
 function drift_vpar(r::Gyrokinetic, ω, k::Wavevector, ωn, ωT, μ)
     a = k.ky * r.c
-    n0 = ω - ωn - ωT * (μ - 1.5) + r.alpha * k.ky * r.cperp * μ
-    n2 = -ωT / 2 + r.alpha * a
+    n0 = ω - ωn - ωT * (μ - 1.5) + r.prescribed * k.ky * r.cperp * μ
+    n2 = -ωT / 2 + r.prescribed * a
     return quadratic_average(n0, n2, a, abs(k.kz), ω + k.ky * r.cperp * μ)
 end
 
@@ -109,7 +109,7 @@ end
 function own_units(r::Gyrokinetic, s::Species)
     hasdrift(r) || return r
     f = sign(s.q) * thermal_gyroradius(s)
-    return Gyrokinetic(r.c * f, r.cperp * f, r.alpha, r.mu, r.wmu)
+    return Gyrokinetic(r.c * f, r.cperp * f, r.prescribed, r.mu, r.wmu)
 end
 
 # Electromagnetic: frame k⊥ ∥ x̂ (own units, positive gyration), `u` the lab ŷ (the direction of ∇B × b̂ and of the drift)
@@ -123,7 +123,7 @@ end
 # the δB∥ equation up to O(ω/Ω, ρ/L). Plus the lowest-order polarisation and E×B of `Gyrokinetic` (`Mp`).
 function species_susceptibility(r::Gyrokinetic, ω, k::Wavevector, ωn, ωT, u)
     hasdrift(r) || return susceptibility(r, ω, k, ωn, ωT)       # exact p = 0 tensor
-    r.alpha == 0 || throw(ArgumentError("Gyrokinetic: alpha ≠ 0 (prescribed drift) is electrostatic only"))
+    r.prescribed && throw(ArgumentError("Gyrokinetic: the prescribed drift (prescribed = true) is electrostatic only"))
     b = kperp(k)^2
     ky = sqrt(b) * u[1]                                   # lab k_y in own units
     kv = SVector(sqrt(b), 0.0, k.kz)

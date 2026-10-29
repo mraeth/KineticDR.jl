@@ -892,19 +892,19 @@ end
 @testset "magnetic drift: local response" begin
     ky, R0, ω = 0.5, 50.0, -0.03 + 0.01im
     k = Wavevector(ky = ky, kz = 0.02)
-    for alpha in (0.0, 1.0)
-        s = Species(κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 1 / R0, alpha = alpha, nmu = 200))
+    for prescribed in (false, true)
+        s = Species(κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 1 / R0, prescribed = prescribed, nmu = 200))
         # independent: direct double quadrature in (s, μ), Im ω > 0
         W = quadgk(μ -> exp(-μ) * KD.besselj0(ky * sqrt(2μ))^2 * quadgk(v -> begin
                 ωD = -ky * (v^2 + μ) / R0
                 ωs = ky * (-0.04 + -0.16 * (μ + v^2 / 2 - 1.5))
-                exp(-v^2 / 2) / sqrt(2π) * (ω - alpha * ωD - ωs) / (ω - k.kz * v - ωD)
+                exp(-v^2 / 2) / sqrt(2π) * (ω - prescribed * ωD - ωs) / (ω - k.kz * v - ωD)
             end, -12, 12; rtol = 1e-11)[1], 0, 40; rtol = 1e-9)[1]
         @test nonadiabatic_response(s, ω, k) ≈ W rtol = 1e-6
     end
     # kinetic electrons: ω_D ∝ T_s/q_s, i.e. sgn(q) enters the rescaling to own units
     e = Species(q = -1, m = 1 / 100, T = 2.0, κn = -0.04, κT = -0.16,
-                response = Gyrokinetic(c = 0.02, cperp = 0.03, alpha = 1.0, nmu = 800))
+                response = Gyrokinetic(c = 0.02, cperp = 0.03, prescribed = true, nmu = 800))
     ke, ωe, vt, ρ = Wavevector(ky = 0.5, kz = 0.002), 0.03 + 0.01im, sqrt(200.0), sqrt(0.02)
     We = quadgk(μ -> exp(-μ) * KD.besselj0(ke.ky * ρ * sqrt(2μ))^2 * quadgk(v -> begin
             ωD = 2 * ke.ky * (0.02 * v^2 + 0.03 * μ)              # -k_y (T/q)(c s² + c⊥ μ), T/q = -2
@@ -918,9 +918,9 @@ end
         d = Species(κT = -0.3, response = Gyrokinetic(c = 0.0, cperp = 1e-200))
         @test nonadiabatic_response(d, ω, kk) ≈ nonadiabatic_response(g, ω, kk) rtol = 1e-12
     end
-    # -k_y mirror: W(-k_y, -ω*) = W(k_y, ω)*, both α, both signs of the charge
-    for alpha in (0.0, 1.0), q in (1, -1)
-        s = Species(; q, κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 0.02, cperp = 0.03, alpha = alpha))
+    # -k_y mirror: W(-k_y, -ω*) = W(k_y, ω)*, both drives, both signs of the charge
+    for prescribed in (false, true), q in (1, -1)
+        s = Species(; q, κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 0.02, cperp = 0.03, prescribed = prescribed))
         @test nonadiabatic_response(s, -conj(ω), Wavevector(ky = -ky, kz = 0.02)) ≈ conj(nonadiabatic_response(s, ω, k)) rtol = 1e-13
     end
     # nmu convergence near the drift pole (k_y c = 0.01): geometric, 4e-5 at 64 and 1e-6 at 128 nodes
@@ -931,21 +931,21 @@ end
     # toroidal ITG roots (R/L_T = 8, R/L_n = 2, adiabatic electrons, k_z = 0), regression values of the snapshot
     # b5fc4f4, checked against the independent double quadrature in (v∥, μ): a Newton step on W - 2 = 0 from the
     # stored root is below 1e-9
-    for (alpha, ref) in ((0.0, -0.0289898331 + 0.0130943411im), (1.0, -0.0216328565 + 0.0162489625im))
-        ion = Species(κn = -2 / 50, κT = -8 / 50, response = Gyrokinetic(c = 1 / 50, alpha = alpha, nmu = 160))
+    for (prescribed, ref) in ((false, -0.0289898331 + 0.0130943411im), (true, -0.0216328565 + 0.0162489625im))
+        ion = Species(κn = -2 / 50, κT = -8 / 50, response = Gyrokinetic(c = 1 / 50, prescribed = prescribed, nmu = 160))
         m = Model((ion, adiabatic_electrons()), Quasineutrality())
         ω0 = find_modes(m, Wavevector(ky = 0.5); re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
         @test ω0 ≈ ref atol = 1e-8
         Db(w) = quadgk(μ -> exp(-μ) * KD.besselj0(0.5 * sqrt(2μ))^2 * quadgk(v -> begin
                 ωD = -0.5 * (v^2 + μ) / 50
                 ωs = 0.5 * (-2 / 50 + -8 / 50 * (μ + v^2 / 2 - 1.5))
-                exp(-v^2 / 2) / sqrt(2π) * (w - alpha * ωD - ωs) / (w - ωD)
+                exp(-v^2 / 2) / sqrt(2π) * (w - prescribed * ωD - ωs) / (w - ωD)
             end, -12, 12; rtol = 1e-12)[1], 0, 40; rtol = 1e-11)[1] - 2
         h = 1e-5
         @test abs(Db(ref) / ((Db(ref + h) - Db(ref - h)) / 2h)) < 1e-9
     end
-    # the prescribed drift (alpha ≠ 0) is electrostatic only
-    @test_throws ArgumentError dispersion(Model((Species(response = Gyrokinetic(c = 0.02, alpha = 1.0)), Species(q = -1, m = 1 / 1836)),
+    # the prescribed drift is electrostatic only
+    @test_throws ArgumentError dispersion(Model((Species(response = Gyrokinetic(c = 0.02, prescribed = true)), Species(q = -1, m = 1 / 1836)),
                                                 Darwin(beta = 0.01)), 0.1 + 0.01im, k)
 end
 
@@ -961,11 +961,11 @@ end
         Aw, Aq = operator(g, mw, k, -0.03 + 0.01im), operator(g, mq, k, -0.03 + 0.01im)
         @test maximum(abs.(Aw - Aq)) < 1e-12 * maximum(abs.(Aw))
     end
-    # uniform drift: the radial eigenvalue is the local root, α = 0 and 1
+    # uniform drift: the radial eigenvalue is the local root, both drives
     mg = radial_grid(-20, 20, 40; bc = :mirror)
     k0 = Wavevector(ky = 0.5)
-    for alpha in (0.0, 1.0)
-        md = Model((Species(κT = -8 / 50, κn = -2 / 50, response = Gyrokinetic(c = 1 / 50, alpha = alpha)),
+    for prescribed in (false, true)
+        md = Model((Species(κT = -8 / 50, κn = -2 / 50, response = Gyrokinetic(c = 1 / 50, prescribed = prescribed)),
                     adiabatic_electrons()), Quasineutrality())
         loc = find_modes(md, k0; re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
         r = eigenmode(mg, md, k0, loc * 1.02)
@@ -998,8 +998,8 @@ end
     cz = Model((species_profile(; N, T, response = x -> Gyrokinetic(c = 0.02 * max(x, 0) / 20, nmu = 128)), el), Quasineutrality())
     @test operator(mg, cz, kk, -0.02 + 0.01im) isa Matrix{ComplexF64}
     @test KD.radial_kernel(Gyrokinetic(), mg, kk, [Species(response = Gyrokinetic()) for _ in mg.x], Species(response = Gyrokinetic())) isa KD.WeberOperator
-    # the exact path ignores nmu and alpha; the drift path has no Gordeyev sum
-    @test nonadiabatic_response(Species(κT = -0.3, response = Gyrokinetic(nmu = 8, alpha = 1.0)), 0.02 + 0.01im, kk) ==
+    # the exact path ignores nmu and prescribed; the drift path has no Gordeyev sum
+    @test nonadiabatic_response(Species(κT = -0.3, response = Gyrokinetic(nmu = 8, prescribed = true)), 0.02 + 0.01im, kk) ==
           nonadiabatic_response(Species(κT = -0.3, response = Gyrokinetic()), 0.02 + 0.01im, kk)
     @test_throws ArgumentError gordeyev(Gyrokinetic(c = 0.02), 0.02 + 0.01im, kk)
 end

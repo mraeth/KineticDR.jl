@@ -56,7 +56,7 @@ Which response works with which model:
 |---|---|:-:|:-:|:-:|
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | (not planned) |
-| `Gyrokinetic(; c = 0, cperp = c, alpha = 0, nmu = 128)` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω. `c`, `cperp`: magnetic drift (toroidal ITG, ∇B), μ by quadrature | ✓ | ✓ (drift: `alpha = 0`) | ✓ |
+| `Gyrokinetic(; c = 0, cperp = c, prescribed = false, nmu = 128)` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω. `c`, `cperp`: magnetic drift (toroidal ITG, ∇B), μ by quadrature | ✓ | ✓ (drift: `prescribed = false`) | ✓ |
 | `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
 | `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | ✓ |
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
@@ -115,8 +115,8 @@ find_modes(Model((ion, Species(q = -1, response = Boltzmann())), Quasineutrality
   and at large k⊥ρ the oscillation of J₀² needs `nmu` ≳ (k⊥ρ_s)² (at k⊥ρ_s = 10: 64 nodes 15% off `Gyrokinetic`, 128 exact).
 - Below the real axis the quadrature turns the continuum of drift resonances into `nmu` cuts at real
   ω = k_z² v_t²/(4 k_y τ c) − k_y τ c⊥ μ_k (τ = T/q): damped drift modes there depend on `nmu`. Trust Im ω > 0, converge `nmu` otherwise.
-- `alpha = 1` puts ω_D in the drive numerator as well (bslLD's prescribed drift, which does no work against E);
-  `alpha = 0` is gyrokinetic. `alpha = 1` is electrostatic only.
+- `prescribed = true` puts ω_D in the drive numerator as well (bslLD's prescribed drift, which does no work against
+  E); `false` (the default) is gyrokinetic. `prescribed = true` is electrostatic only.
 - **Equilibrium ∇B.** c⊥ = −∂x ln B. A slab in pressure balance has c = 0 and
   c⊥ = `pressure_balance_cperp(species, β)` = (β/2) Σ_s N_s T_s (κn_s + κT_s), a ∇B along −∇p (good-curvature-like
   drift); pass the same β to the field. The diamagnetic drive is the gradient at fixed energy (flux-tube convention):
@@ -237,7 +237,7 @@ r = find_eigenmode(g, m, k; re = 1.0:0.02:1.1, imag = 0.001:0.002:0.011, starts 
   `Gyrokinetic` and `GordeyevSeries(pmax = 0)` are the same kernel.
 - **Magnetic drift.** A `Gyrokinetic` species with a drift anywhere on the grid takes the response's `nmu`
   Gauss–Laguerre nodes in μ instead of Weber's integral (W is no longer affine in μ), with one gyroaverage matrix per
-  node, at every x; c, c⊥ and α may depend on x and vanish somewhere (`response = x -> Gyrokinetic(c = 1 / (R0 + x))`),
+  node, at every x; c, c⊥ and `prescribed` may depend on x and vanish somewhere (`response = x -> Gyrokinetic(c = 1 / (R0 + x))`),
   `nmu` may not. Without drift at every x the exact Weber kernel is used. The quadrature under-resolves the
   high-k_x columns of A (‖ΔA‖/‖A‖ = 3% at k_y = 0.5, 40% at k_y = 5 for 64 nodes, N = 128), which localised
   modes hardly feel: converge `nmu` as well as N. B = 1 and k∥ = k_z everywhere still: c is a prescribed drift,

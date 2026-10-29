@@ -21,16 +21,17 @@ Base.@kwdef struct GordeyevSeries <: AbstractResponse
 end
 
 """
-    Gyrokinetic(; c = 0, cperp = c, alpha = 0, nmu = 128)
+    Gyrokinetic(; c = 0, cperp = c, prescribed = false, nmu = 128)
 
 Gyrokinetic response: the p = 0 term (J₀², no cyclotron harmonics; the response of slab ITG/ETG), optionally with
 the magnetic drift ω_D = -k_y (T_s/q_s) (c v∥²/v_ts² + c⊥ μ): `c` the curvature drift, `cperp` the ∇B drift (in 1/ρ_i,
-B = 1 units; a low-β torus has c = c⊥ = 1/(B R)). `alpha` multiplies ω_D in the drive numerator: 0 is gyrokinetic,
-1 is bslLD's prescribed drift (the drift does no work against E; electrostatic only).
+B = 1 units; a low-β torus has c = c⊥ = 1/(B R)). `prescribed = true` puts ω_D in the drive numerator as well,
+(ω - ω_D - ω_*)/(ω - k∥v∥ - ω_D): bslLD's prescribed drift, which does no work against E (electrostatic only);
+`false` is gyrokinetic.
 
 The two settings differ in their numerics:
 - **c = c⊥ = 0** (default): both velocity integrals are exact (Z functions; Γ₀, Weber's integral radially), for any
-  Im ω; `alpha` and `nmu` are unused.
+  Im ω; `prescribed` and `nmu` are unused.
 - **with drift**: the v∥ average stays exact (`polynomial_average`), μ is an `nmu`-point Gauss–Laguerre quadrature,
   which must also resolve the oscillation of J₀²(k⊥ρ√(2μ)): `nmu` ≳ (k⊥ρ_s)² (at k⊥ρ_s = 10, 64 nodes are 15% off the
   exact path, the default 128 agree to 1e-14).
@@ -56,13 +57,13 @@ of the μ integral. Trust Im ω > 0; check `nmu` convergence for damped drift mo
 struct Gyrokinetic <: AbstractResponse
     c::Float64
     cperp::Float64
-    alpha::Float64
+    prescribed::Bool
     mu::Vector{Float64}
     wmu::Vector{Float64}
 end
-function Gyrokinetic(; c = 0.0, cperp = c, alpha = 0.0, nmu = 128)
+function Gyrokinetic(; c = 0.0, cperp = c, prescribed = false, nmu = 128)
     mu, wmu = gauss_laguerre(nmu)                    # drift.jl
-    return Gyrokinetic(float(c), float(cperp), float(alpha), mu, wmu)
+    return Gyrokinetic(float(c), float(cperp), prescribed, mu, wmu)
 end
 
 "Whether a `Gyrokinetic` response carries a magnetic drift (and so uses the μ quadrature)."

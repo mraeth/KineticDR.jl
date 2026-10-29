@@ -17,7 +17,7 @@
 # Both integrals are exact: the v∥ average is two Z functions (any Im ω), and W is affine in μ, so the μ
 # integral is Weber's second integral (`weber`). With guiding-centre profiles (below) the operator is exact
 # up to the cut-off P (checked against `exponential_dispersion`). `Gyrokinetic(c = …)` adds the magnetic drift
-# ω_D = -k_y (T_s/q_s)(c s² + c⊥ μ) to the p = 0 denominator, W = ⟨(ω - α ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩: the v∥ average
+# ω_D = -k_y (T_s/q_s)(c s² + c⊥ μ) to the p = 0 denominator, W = ⟨(ω - [prescribed] ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩: the v∥ average
 # is still exact (`quadratic_average`), the μ integral is the response's Gauss–Laguerre quadrature
 # (`QuadratureOperator`). N_s, T_s of a kinetic species are guiding-centre profiles, so its
 # adiabatic term is a_s = q_s² ∫F_s d³v/T_s at the particle position (`gc_average`); a `Boltzmann` species
@@ -374,7 +374,7 @@ radial_kernel(r::AbstractResponse, g::RadialGrid, k::Wavevector, ss, sp) = throw
     "radial kernels: Boltzmann, DriftKinetic, Cold, Gyrokinetic or GordeyevSeries(pmax = P); got $(nameof(typeof(r)))"))
 
 # What must agree along x: the response, for the kinetic ones only the cut-off (`Gyrokinetic` = `GordeyevSeries(pmax = 0)`;
-# the drift coefficients c, c⊥, α may vary, `radial_kernel` checks the μ nodes)
+# the drift coefficients c, c⊥ and `prescribed` may vary, `radial_kernel` checks the μ nodes)
 radial_key(r::AbstractResponse) = r
 radial_key(r::Union{Gyrokinetic,GordeyevSeries}) = harmonics(r)
 
