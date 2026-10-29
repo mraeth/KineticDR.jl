@@ -12,7 +12,7 @@
 
 The defaults are the reference ion. `response` is any `AbstractResponse`: `GordeyevSeries`
 (all harmonics, or `pmax = 12` as in Maeyama), `Gyrokinetic` (p = 0), `Boltzmann` (adiabatic),
-`GordeyevIntegral` (validation).
+`GordeyevIntegral` (validation), `DriftKinetic` and `Cold` (no finite Larmor radius).
 """
 struct Species{R<:AbstractResponse}
     q::Float64
@@ -72,9 +72,22 @@ function susceptibility(s::Species, ω, k::Wavevector)
     return (s.q^2 * s.N / s.m) / ω^2 * (R * (F .* M .* transpose(F)) * transpose(R))
 end
 
-"Charge response q_s δn_s/φ in units e N_i/T_i: (q² N/T)(W − 1)."
+"""
+    charge_response(s, ω, k) -> q_s δn_s/φ
+
+Charge response in units e N_i/T_i: (q² N/T)(W − 1) − w N m k⊥², with w the `polarization_weight` (0 for the
+kinetic responses, whose W holds the polarisation; 0 or 1 for `DriftKinetic`). `Cold` is the fluid response.
+A response without a Gordeyev sum overrides this method for `Species{R}` (lab units, its own gradient drive).
+"""
 charge_response(s::Species, ω, k::Wavevector) =
-    s.q^2 * s.N / s.T * (nonadiabatic_response(s, ω, k) - 1)
+    s.q^2 * s.N / s.T * (nonadiabatic_response(s, ω, k) - 1) - polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
+function charge_response(s::Species{Cold}, ω, k::Wavevector)
+    s.κT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0 (got $(s.κT))"))
+    return -polarization_weight(s, ω) * s.N * s.m * kperp(k)^2 - s.q * s.N * s.κn * k.ky / ω + s.q^2 * s.N / s.m * k.kz^2 / ω^2
+end
+
+# Polarisation weight w of `s` at lab frequency ω (see `polarization_weight(r, ω)` in responses.jl).
+polarization_weight(s::Species, ω) = polarization_weight(s.response, ω / abs(cyclotron_frequency(s)))
 
 """
     Model(species, field)

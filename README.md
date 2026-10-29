@@ -3,9 +3,9 @@
 Kinetic dispersion relations of a magnetised plasma. You describe the plasma as a set of species
 (ions and electrons are the same type) and a field equation, and solve for the complex frequency ω:
 
-- **local electrostatic**: full-orbit (all cyclotron harmonics), gyrokinetic or Boltzmann species with
-  density and temperature gradients, closed by quasineutrality or Poisson;
-- **local electromagnetic**: hot, cold and drift-kinetic species, closed by Darwin or full Maxwell;
+- **local electrostatic**: full-orbit (all cyclotron harmonics), gyrokinetic, drift-kinetic, cold or Boltzmann
+  species with density and temperature gradients, closed by quasineutrality or Poisson;
+- **local electromagnetic**: the same species without gradients, closed by Darwin or full Maxwell;
 - **radial**: gyrokinetic or full-orbit species with radial profiles n(x), T(x); the eigenvalue problem for φ(x).
 
 Validation studies (Raeth & Hallatschek, PRL **133**, 195101 (2024); Maeyama, Phys. Plasmas **33**,
@@ -45,7 +45,7 @@ dispersion(model, 1.05 + 0.01im, k)                    # D(ω); the modes are it
 ```
 
 - `Species(; q, m, T, N, κn, κT, response)` gives charge, mass, temperature, density and gradients in
-  the units above, plus the kinetic response. Electrons are `q = -1, m = 1/1836` (or a reduced mass).
+  the units above, plus the response. Electrons are `q = -1, m = 1/1836` (or a reduced mass).
 - `Model(species, field)` takes any number of species.
 - `dispersion(model, ω, k)` is a scalar, analytic in ω. Every solver below only needs this function.
 
@@ -55,10 +55,10 @@ Which response works with which model:
 |---|---|:-:|:-:|:-:|
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | |
-| `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG) | ✓ | | ✓ |
-| `Boltzmann()` | adiabatic, δn = −qNφ/T | ✓ | | ✓ |
-| `Cold()` | cold fluid (Stix S, D, P) | | ✓ | |
-| `DriftKinetic(; polarization = false)` | m → 0 limit of the hot tensor (electrons) | | ✓ | |
+| `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω | ✓ | ✓ | ✓ |
+| `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
+| `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | |
+| `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | |
 
 Field equations: `Quasineutrality()` and `Poisson(lambda2 = (λ_D/ρ_i)²)` are electrostatic, local and
 radial. `Darwin(beta)` and `Maxwell(beta, lambda2)` are electromagnetic and local only. A combination
@@ -116,6 +116,14 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
 - `dispersion` is a scalar of arbitrary size: only its zeros mean anything. All the solvers above apply
   to it.
 - Discard roots at ω ≈ 0. det(ω²𝒟) vanishes there for k∥ = 0, and with `DriftKinetic` electrons also for k∥ ≠ 0.
+- **`Gyrokinetic` and `Boltzmann`.** `Gyrokinetic` is the hot tensor's p = 0 term plus the polarisation and E×B
+  currents of p ≠ 0 to lowest order in ω/Ω. `Boltzmann` is the ζ → 0 limit of `DriftKinetic`: an isothermal
+  massless fluid along the field line, δn = −qNψ/T (E∥ = −ik∥ψ), with the E×B and the diamagnetic current. It
+  lacks only the transit-time damping of δB∥, O(k⊥²ρ²).
+- **Polarisation and the density gradient.** The polarisation charge of `DriftKinetic(polarization = true)` and
+  `Cold` is Boussinesq, −w N m k⊥², and the density gradient is advected by the E×B drift only, as in the local
+  kinetic theory: the polarisation current across the gradient is dropped. So `Cold` is the T → 0 limit of
+  `GordeyevSeries` also with κn ≠ 0.
 - Limits:
   - No gradients: a species with κ ≠ 0 throws.
   - Real k only.
@@ -216,6 +224,10 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
     derivative, in the species' own units (ω in |Ω_s|, k in 1/ρ_s);
   - `susceptibility(r, ω, k)` for the electromagnetic path: the 3×3 tensor M in the frame where k⊥ ∥ x̂.
   The `Species` methods add the gradient drive, the units, the electron sign and the rotation to (kx, ky).
+  A fluid response without a Gordeyev sum (`Cold`) defines `charge_response(::Species{R}, ω, k)` instead of
+  `gordeyev`: at the `Species` level, in lab units, with its own gradient drive. A polarisation outside the
+  kinetic response comes from `polarization_weight(r, ω)` (species units), which sets both the charge
+  −w N m k⊥² and M_xx = M_yy = ω² w, so the electrostatic and electromagnetic paths stay consistent.
 - A new electrostatic **field equation** is a subtype of `AbstractFieldEquation` with
   `residual(field, ρs, k)`, where ρs is the tuple of the species' q_s δn_s/φ.
 

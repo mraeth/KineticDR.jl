@@ -342,8 +342,10 @@ end
     @test dkerr(1e-6) < 0.1 * dkerr(1e-4)
 
     # (12) guards
-    @test_throws ArgumentError dispersion(Model((Species(response = Cold()), Species(q = -1, response = Boltzmann())), Quasineutrality()), ω, k)
-    @test_throws ArgumentError dispersion(Model((Species(), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), ω, k)
+    @test_throws ArgumentError nonadiabatic_response(Species(response = Cold()), ω, k)          # fluid: no Gordeyev sum
+    @test_throws ArgumentError charge_response(Species(κT = 0.1, response = Cold()), ω, k)      # no temperature
+    @test_throws ArgumentError dispersion(Model((Species(), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), ω,
+                                          Wavevector(ky = 0.5, kz = 0.0))                     # Boltzmann needs k∥ ≠ 0
     @test_throws ArgumentError dispersion(Model((Species(κn = 0.1), Species(q = -1, m = μ)), Darwin(beta = β)), ω, k)
 end
 
@@ -609,4 +611,66 @@ end
                    Wavevector(ky = 0.5, kz = 0.01), 0.02 + 0.01im) rtol = 1e-14
     # uniform T: one table per harmonic, shared by all nodes
     @test size(KD.WeberOperator(g, Wavevector(ky = 1.0), [Species() for _ in g.x], 2).W0[1], 1) == 1
+end
+
+@testset "local: DriftKinetic and Cold (electrostatic), Gyrokinetic and Boltzmann (electromagnetic)" begin
+    # the electrostatic responses are -k·χ·k of the electromagnetic tensors (zero gradient), every response, both signs
+    # (k∥ < 0: the odd elements; k⊥ = 0; k∥ = 0 without Boltzmann; ω near Ω: the cold pole)
+    for k in (Wavevector(0.4, 0.7, 0.1), Wavevector(0.0, 1.1, 0.3), Wavevector(0.3, 0.5, -0.2), Wavevector(0.0, 0.0, 0.2),
+              Wavevector(0.4, 0.7, 0.0)), q in (1, -1), ω in (0.3 + 0.02im, 0.98 + 0.02im),
+        r in (Cold(), DriftKinetic(), DriftKinetic(polarization = true), Gyrokinetic(), Boltzmann(), GordeyevSeries())
+        (k.kz == 0 && r isa Boltzmann) && continue
+        s, kv = Species(; q, m = q > 0 ? 1.0 : 0.3, T = 0.7, N = 0.8, response = r), [k.kx, k.ky, k.kz]
+        @test charge_response(s, ω, k) ≈ -transpose(kv) * susceptibility(s, ω, k) * kv rtol = 1e-12 atol = 1e-15   # DriftKinetic at k∥ = 0: 0
+    end
+    # electromagnetic Gyrokinetic at k⊥ = 0 (b = 0 path) is the k⊥ → 0 limit
+    @test susceptibility(Species(response = Gyrokinetic()), 0.3 + 0.02im, Wavevector(0.0, 0.0, 0.2)) ≈
+          susceptibility(Species(response = Gyrokinetic()), 0.3 + 0.02im, Wavevector(0.0, 1e-12, 0.2)) rtol = 1e-11   # xz, zx are O(k⊥)
+    # drift kinetic = gyrokinetic at k⊥ → 0 with the same ω_*
+    ky, ω = 0.8, 0.05 + 0.01im
+    dk = Species(q = -1, m = 0.01, T = 0.5, κn = 0.2, κT = -0.4, response = DriftKinetic())
+    gk = Species(q = -1, m = 0.01, T = 0.5, κn = 0.2ky / 1e-9, κT = -0.4ky / 1e-9, response = Gyrokinetic())
+    @test charge_response(dk, ω, Wavevector(; ky, kz = 0.2)) ≈ charge_response(gk, ω, Wavevector(ky = 1e-9, kz = 0.2)) rtol = 1e-13
+    # cold = full-orbit kinetic as T → 0, also with a density gradient (both advect it by the E×B drift only)
+    k = Wavevector(0.4, 0.7, 0.1)
+    for ω in (0.3 + 0.02im, 1.7 + 0.05im), q in (1, -1), κn in (0.0, 0.3)
+        @test charge_response(Species(; q, κn, response = Cold()), ω, k) ≈
+              charge_response(Species(; q, κn, T = 1e-8, response = GordeyevSeries()), ω, k) rtol = 1e-6
+    end
+    # gyrokinetic = full orbit to O(ω²) for ω ~ k∥v_t → 0 (electromagnetic, lab frame: both charge signs, k⊥ off the axes)
+    gkerr(w, q) = (kk = Wavevector(0.9cos(0.7), 0.9sin(0.7), w); ω = w * (1 + 0.3im);
+                   a = susceptibility(Species(; q), ω, kk);
+                   maximum(abs, a - susceptibility(Species(; q, response = Gyrokinetic()), ω, kk)) / maximum(abs, a))
+    for q in (1, -1)
+        @test gkerr(1e-3, q) < 2e-6
+        @test gkerr(1e-3, q) < 2e-4 * gkerr(1e-1, q)
+    end
+    # (1 - Γ₀)/b: Taylor series and the direct form agree across the switch
+    @test KD._one_minus_Gamma0_over_b(prevfloat(0.5)) ≈ (1 - Gamma_p(0, 0.5)) / 0.5 rtol = 1e-14
+    @test KD._one_minus_Gamma0_over_b(1e-3) ≈ 0.9992504164844406 rtol = 1e-15         # BigFloat reference
+    @test KD._one_minus_Gamma0_over_b(0.0) == 1
+    # Boltzmann = drift-kinetic electrons as ζ = ω/(√2 k∥v_t) ∝ √m → 0: every element of χ, O(ζ)
+    bz(m) = (kk = Wavevector(0.3, 0.5, 0.2); w = 0.05 + 0.01im;
+             (susceptibility(Species(q = -1, m = m, response = Boltzmann()), w, kk), susceptibility(Species(q = -1, m = m, response = DriftKinetic()), w, kk)))
+    bzerr(m) = (ab = bz(m); maximum(abs, ab[1] - ab[2]) / maximum(abs, ab[2]))
+    @test bzerr(1e-6) < 1e-2
+    @test bzerr(1e-6) < 0.12 * bzerr(1e-4)
+    # finite β: Darwin roots with Boltzmann electrons = drift-kinetic electrons at m → 0 (cold ions); the electrons'
+    # Landau damping, Im ω ~ ζ, is what Boltzmann drops
+    kd = Wavevector(0.0, 0.4, 0.05)
+    for β in (0.1, 1.0)
+        ωb, okb = find_root(Model((Species(response = Cold()), Species(q = -1, response = Boltzmann())), Darwin(beta = β)), kd, 0.045 + 0.0im)
+        ωd, okd = find_root(Model((Species(response = Cold()), Species(q = -1, m = 1e-8, response = DriftKinetic())), Darwin(beta = β)), kd, ωb)
+        @test okb && okd
+        @test real(ωb) ≈ real(ωd) rtol = 1e-8
+        @test abs(imag(ωd)) < 1e-4 * abs(ωd)
+    end
+    # β → 0: the electromagnetic root tends to the electrostatic one, linearly in β (no gradients: an ion acoustic wave)
+    ku = Wavevector(ky = 0.3, kz = 0.1)
+    for ele in (Species(q = -1, T = 5.0, response = Boltzmann()), Species(q = -1, m = 1 / 1836, T = 5.0, response = DriftKinetic()))
+        ion = Species(response = Gyrokinetic())
+        es, ok = find_root(Model((ion, ele), Quasineutrality()), ku, 0.25 - 0.01im)
+        d(β) = abs(first(find_root(Model((ion, ele), Darwin(beta = β)), ku, es; δ = 1e-4)) - es)
+        @test ok && d(1e-5) < 1e-5 && d(1e-7) < 0.02 * d(1e-5)
+    end
 end
