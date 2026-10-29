@@ -893,7 +893,7 @@ end
     ky, R0, ω = 0.5, 50.0, -0.03 + 0.01im
     k = Wavevector(ky = ky, kz = 0.02)
     for alpha in (0.0, 1.0)
-        s = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 1 / R0, alpha = alpha, nmu = 200))
+        s = Species(κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 1 / R0, alpha = alpha, nmu = 200))
         # independent: direct double quadrature in (s, μ), Im ω > 0
         W = quadgk(μ -> exp(-μ) * KD.besselj0(ky * sqrt(2μ))^2 * quadgk(v -> begin
                 ωD = -ky * (v^2 + μ) / R0
@@ -904,7 +904,7 @@ end
     end
     # kinetic electrons: ω_D ∝ T_s/q_s, i.e. sgn(q) enters the rescaling to own units
     e = Species(q = -1, m = 1 / 100, T = 2.0, κn = -0.04, κT = -0.16,
-                response = GyrokineticDrift(c = 0.02, cperp = 0.03, alpha = 1.0, nmu = 800))
+                response = Gyrokinetic(c = 0.02, cperp = 0.03, alpha = 1.0, nmu = 800))
     ke, ωe, vt, ρ = Wavevector(ky = 0.5, kz = 0.002), 0.03 + 0.01im, sqrt(200.0), sqrt(0.02)
     We = quadgk(μ -> exp(-μ) * KD.besselj0(ke.ky * ρ * sqrt(2μ))^2 * quadgk(v -> begin
             ωD = 2 * ke.ky * (0.02 * v^2 + 0.03 * μ)              # -k_y (T/q)(c s² + c⊥ μ), T/q = -2
@@ -912,19 +912,19 @@ end
             exp(-v^2 / 2) / sqrt(2π) * (ωe - ωD - ωs) / (ωe - ke.kz * vt * v - ωD)
         end, -14, 14; rtol = 1e-12)[1], 0, 5, 20, 60; rtol = 1e-11)[1]
     @test nonadiabatic_response(e, ωe, ke) ≈ We rtol = 1e-6
-    # c = 0 is Gyrokinetic (the exact a = 0 branch), also at k⊥ρ = 10 with the default nmu
+    # c = 0 is Gyrokinetic (the exact a = 0 branch of the quadrature path), also at k⊥ρ = 10 with the default nmu
     for kk in (k, Wavevector(ky = 10.0, kz = 0.02))
         g = Species(κT = -0.3, response = Gyrokinetic())
-        d = Species(κT = -0.3, response = GyrokineticDrift(c = 0.0))
+        d = Species(κT = -0.3, response = Gyrokinetic(c = 0.0, cperp = 1e-200))
         @test nonadiabatic_response(d, ω, kk) ≈ nonadiabatic_response(g, ω, kk) rtol = 1e-12
     end
     # -k_y mirror: W(-k_y, -ω*) = W(k_y, ω)*, both α, both signs of the charge
     for alpha in (0.0, 1.0), q in (1, -1)
-        s = Species(; q, κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02, cperp = 0.03, alpha = alpha))
+        s = Species(; q, κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 0.02, cperp = 0.03, alpha = alpha))
         @test nonadiabatic_response(s, -conj(ω), Wavevector(ky = -ky, kz = 0.02)) ≈ conj(nonadiabatic_response(s, ω, k)) rtol = 1e-13
     end
     # nmu convergence near the drift pole (k_y c = 0.01): geometric, 4e-5 at 64 and 1e-6 at 128 nodes
-    sn(n) = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02, nmu = n))
+    sn(n) = Species(κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 0.02, nmu = n))
     Wref = nonadiabatic_response(sn(512), ω, k)
     err(n) = abs(nonadiabatic_response(sn(n), ω, k) - Wref) / abs(Wref)
     @test err(64) < 1e-4 && err(128) < 3e-6 && err(256) < 0.05 * err(128)
@@ -932,7 +932,7 @@ end
     # b5fc4f4, checked against the independent double quadrature in (v∥, μ): a Newton step on W - 2 = 0 from the
     # stored root is below 1e-9
     for (alpha, ref) in ((0.0, -0.0289898331 + 0.0130943411im), (1.0, -0.0216328565 + 0.0162489625im))
-        ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, alpha = alpha, nmu = 160))
+        ion = Species(κn = -2 / 50, κT = -8 / 50, response = Gyrokinetic(c = 1 / 50, alpha = alpha, nmu = 160))
         m = Model((ion, adiabatic_electrons()), Quasineutrality())
         ω0 = find_modes(m, Wavevector(ky = 0.5); re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
         @test ω0 ≈ ref atol = 1e-8
@@ -945,7 +945,7 @@ end
         @test abs(Db(ref) / ((Db(ref + h) - Db(ref - h)) / 2h)) < 1e-9
     end
     # the prescribed drift (alpha ≠ 0) is electrostatic only
-    @test_throws ArgumentError dispersion(Model((Species(response = GyrokineticDrift(c = 0.02, alpha = 1.0)), Species(q = -1, m = 1 / 1836)),
+    @test_throws ArgumentError dispersion(Model((Species(response = Gyrokinetic(c = 0.02, alpha = 1.0)), Species(q = -1, m = 1 / 1836)),
                                                 Darwin(beta = 0.01)), 0.1 + 0.01im, k)
 end
 
@@ -955,7 +955,7 @@ end
     k = Wavevector(ky = 0.7, kz = 0.02)
     el = species_profile(; q = -1, N, response = Boltzmann())
     mw = Model((species_profile(; N, T, response = Gyrokinetic()), el), Quasineutrality())
-    mq = Model((species_profile(; N, T, response = GyrokineticDrift(c = 0.0, nmu = 128)), el), Quasineutrality())
+    mq = Model((species_profile(; N, T, response = Gyrokinetic(c = 0.0, cperp = 1e-200, nmu = 128)), el), Quasineutrality())   # vanishing drift: μ quadrature
     for bc in (:dirichlet, :mirror, :periodic)
         g = radial_grid(-15, 15, 40; bc)
         Aw, Aq = operator(g, mw, k, -0.03 + 0.01im), operator(g, mq, k, -0.03 + 0.01im)
@@ -965,7 +965,7 @@ end
     mg = radial_grid(-20, 20, 40; bc = :mirror)
     k0 = Wavevector(ky = 0.5)
     for alpha in (0.0, 1.0)
-        md = Model((Species(κT = -8 / 50, κn = -2 / 50, response = GyrokineticDrift(c = 1 / 50, alpha = alpha)),
+        md = Model((Species(κT = -8 / 50, κn = -2 / 50, response = Gyrokinetic(c = 1 / 50, alpha = alpha)),
                     adiabatic_electrons()), Quasineutrality())
         loc = find_modes(md, k0; re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
         r = eigenmode(mg, md, k0, loc * 1.02)
@@ -973,28 +973,38 @@ end
         @test r.ω ≈ loc rtol = 1e-9
     end
     # A is analytic through the real axis (Im ω < 0 is the continuation)
-    md = Model((Species(κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50)), adiabatic_electrons()), Quasineutrality())
+    md = Model((Species(κT = -8 / 50, response = Gyrokinetic(c = 1 / 50)), adiabatic_electrons()), Quasineutrality())
     ω0, h = -0.0123 + 0.0im, 1e-7
     dA_re = (operator(mg, md, k0, ω0 + h) - operator(mg, md, k0, ω0 - h)) / 2h
     dA_im = (operator(mg, md, k0, ω0 + im * h) - operator(mg, md, k0, ω0 - im * h)) / (2im * h)
     @test LinearAlgebra.norm(dA_re - dA_im) < 1e-4 * LinearAlgebra.norm(dA_re)
     # profiles of the lab drift coefficient c(x) and kinetic electrons with drift: uniform limit is the local root
-    ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
-    ele = Species(q = -1, m = 1 / 400, κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, nmu = 160))
+    ion = Species(κn = -2 / 50, κT = -8 / 50, response = Gyrokinetic(c = 1 / 50, nmu = 160))
+    ele = Species(q = -1, m = 1 / 400, κn = -2 / 50, κT = -8 / 50, response = Gyrokinetic(c = 1 / 50, nmu = 160))
     m2 = Model((ion, ele), Quasineutrality())
     kk = Wavevector(ky = 0.5, kz = 0.01)
     loc = find_modes(m2, kk; re = -0.08:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[end]
     r = eigenmode(mg, m2, kk, loc * 1.02)
     @test r.converged
     @test r.ω ≈ loc rtol = 1e-8
-    sp = species_profile(; N, T, response = x -> GyrokineticDrift(c = 1 / (50 + x)))
+    sp = species_profile(; N, T, response = x -> Gyrokinetic(c = 1 / (50 + x)))
     @test operator(mg, Model((sp, el), Quasineutrality()), kk, -0.02 + 0.01im) isa Matrix{ComplexF64}
-    # guard: the μ nodes must agree along x
-    mix = x -> Species(response = GyrokineticDrift(c = 0.02, nmu = x < 0 ? 32 : 64))
+    # guard: the μ nodes must agree along x, and a drift anywhere needs Gyrokinetic everywhere
+    mix = x -> Species(response = Gyrokinetic(c = 0.02, nmu = x < 0 ? 32 : 64))
     @test_throws ArgumentError operator(mg, Model((mix, adiabatic_electrons()), Quasineutrality()), kk, 0.02 + 0.01im)
+    mix2 = x -> Species(response = x < 0 ? GordeyevSeries(pmax = 0) : Gyrokinetic(c = 0.02))
+    @test_throws ArgumentError operator(mg, Model((mix2, adiabatic_electrons()), Quasineutrality()), kk, 0.02 + 0.01im)
+    # a drift profile through zero: the quadrature everywhere, and at c ≡ 0 it is the exact kernel
+    cz = Model((species_profile(; N, T, response = x -> Gyrokinetic(c = 0.02 * max(x, 0) / 20, nmu = 128)), el), Quasineutrality())
+    @test operator(mg, cz, kk, -0.02 + 0.01im) isa Matrix{ComplexF64}
+    @test KD.radial_kernel(Gyrokinetic(), mg, kk, [Species(response = Gyrokinetic()) for _ in mg.x]) isa KD.WeberOperator
+    # the exact path ignores nmu and alpha; the drift path has no Gordeyev sum
+    @test nonadiabatic_response(Species(κT = -0.3, response = Gyrokinetic(nmu = 8, alpha = 1.0)), 0.02 + 0.01im, kk) ==
+          nonadiabatic_response(Species(κT = -0.3, response = Gyrokinetic()), 0.02 + 0.01im, kk)
+    @test_throws ArgumentError gordeyev(Gyrokinetic(c = 0.02), 0.02 + 0.01im, kk)
 end
 
-# Gyrokinetic field equations in (φ, A∥, δB∥) for GyrokineticDrift species, built independently of the tensor:
+# Gyrokinetic field equations in (φ, A∥, δB∥) for Gyrokinetic species, built independently of the tensor:
 # h = (qF/T)(ω - ω_*)/(ω - k∥v∥ - ω_D) ⟨χ⟩, ⟨χ⟩ = J0(φ - v∥A∥) + (T/q) 2μ (J1/z) δB∥;
 # Σ q(-(qN/T)φ + ∫J0 h) = 0, k⊥² A∥ = (β/2) Σ q∫v∥J0 h, δB∥ = -(β/2) Σ ∫ m v⊥² (J1/z) h
 function gk_field_matrix(sp, β, ω, k)
@@ -1033,18 +1043,18 @@ end
     end
     for k in (Wavevector(kx = 0.2, ky = 0.5, kz = 0.02), Wavevector(kx = -0.3, ky = -0.4, kz = -0.03)), ω in (-0.03 + 0.01im, 0.05 - 0.004im),
         (q, m) in ((1, 1.0), (-1, 1 / 100)), (κn, κT) in ((0.0, 0.0), (-0.04, -0.16))
-        # c = 0 is the electromagnetic Gyrokinetic tensor
+        # vanishing drift (quadrature path) is the exact electromagnetic Gyrokinetic tensor
         χg = susceptibility(Species(; q, m, κn, κT, response = Gyrokinetic()), ω, k)
-        @test susceptibility(Species(; q, m, κn, κT, response = GyrokineticDrift(c = 0.0, nmu = 128)), ω, k) ≈ χg rtol = 1e-12
-        # with drift the longitudinal row is the electrostatic GyrokineticDrift charge (continuity closed by the drift current)
-        d = Species(; q, m, κn, κT, response = GyrokineticDrift(c = 0.02, cperp = 0.03, nmu = 64))
+        @test susceptibility(Species(; q, m, κn, κT, response = Gyrokinetic(c = 0.0, cperp = 1e-200, nmu = 128)), ω, k) ≈ χg rtol = 1e-12   # quadrature path
+        # with drift the longitudinal row is the electrostatic Gyrokinetic charge (continuity closed by the drift current)
+        d = Species(; q, m, κn, κT, response = Gyrokinetic(c = 0.02, cperp = 0.03, nmu = 64))
         kv = [k.kx, k.ky, k.kz]
         @test -(transpose(kv) * susceptibility(d, ω, k) * kv) ≈ charge_response(d, ω, k) rtol = 1e-12
     end
     # Darwin with the tensor against the gyrokinetic field equations (independent) under the gyrokinetic ordering:
     # ω, k∥, gradients, drift ∝ ε, the difference O(ω/Ω, ρ/L) → linear in ε (finite β: δB∥ matters, k_x ≠ 0)
-    sp(ε) = (Species(κn = -0.04ε, κT = -0.16ε, response = GyrokineticDrift(c = 0.02ε, nmu = 48)),
-             Species(q = -1, m = 1 / 400, κn = -0.04ε, κT = -0.16ε, response = GyrokineticDrift(c = 0.02ε, nmu = 48)))
+    sp(ε) = (Species(κn = -0.04ε, κT = -0.16ε, response = Gyrokinetic(c = 0.02ε, nmu = 48)),
+             Species(q = -1, m = 1 / 400, κn = -0.04ε, κT = -0.16ε, response = Gyrokinetic(c = 0.02ε, nmu = 48)))
     β, ω1 = 0.03, -0.058906 + 0.043717im                 # unstable; dropping δB∥ moves it by 10%
     Δ = map((0.5, 0.25)) do ε
         k = Wavevector(kx = 0.2, ky = 0.5, kz = 0.01ε)
@@ -1056,8 +1066,8 @@ end
     @test Δ[1] < 2e-3
     @test 0.45 < Δ[2] / Δ[1] < 0.55
     # β → 0: the Darwin root is the electrostatic one, linearly in β
-    ion = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02))
-    ele = Species(q = -1, m = 1 / 400, κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02))
+    ion = Species(κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 0.02))
+    ele = Species(q = -1, m = 1 / 400, κn = -0.04, κT = -0.16, response = Gyrokinetic(c = 0.02))
     k = Wavevector(ky = 0.5, kz = 0.01)
     es, = find_root(Model((ion, ele), Quasineutrality()), k, -0.0287 + 0.0036im)
     d = [abs(first(find_root(Model((ion, ele), Darwin(beta = β)), k, es; δ = 1e-5)) - es) for β in (1e-6, 1e-5)]
@@ -1068,7 +1078,7 @@ end
     sp = (Species(N = 1.0, T = 1.0, κn = -0.05, κT = -0.3), Species(q = -1, m = 1 / 100, N = 1.0, T = 2.0, κn = -0.05, κT = -0.1))
     @test pressure_balance_cperp(sp, 0.02) ≈ 0.01 * (1.0 * (-0.35) + 2.0 * (-0.15))
     # sign: ion orbit (Boris) in B(x) ẑ from pressure balance, B² = 1 - β (p(x) - p(0)), p = e^{κ_p x}: its ∇B drift
-    # v_y equals ω_D/k_y of GyrokineticDrift, -c⊥ v⊥²/2 (T μ = v⊥²/2 at m = 1)
+    # v_y equals ω_D/k_y of Gyrokinetic, -c⊥ v⊥²/2 (T μ = v⊥²/2 at m = 1)
     β, κp = 0.02, -0.5
     cperp = pressure_balance_cperp((Species(κn = κp),), β)
     Bz(x) = sqrt(1 - β * (exp(κp * x) - 1))

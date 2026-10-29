@@ -21,12 +21,52 @@ Base.@kwdef struct GordeyevSeries <: AbstractResponse
 end
 
 """
-    Gyrokinetic()
+    Gyrokinetic(; c = 0, cperp = c, alpha = 0, nmu = 128)
 
-Gyrokinetic response. Electrostatic: only the p = 0 term (the J₀² response of slab ITG/ETG). Electromagnetic:
-the p = 0 term of the hot tensor plus the polarisation and E×B currents of p ≠ 0 to lowest order in ω/Ω.
+Gyrokinetic response: the p = 0 term (J₀², no cyclotron harmonics; the response of slab ITG/ETG), optionally with
+the magnetic drift ω_D = -k_y (T_s/q_s) (c v∥²/v_ts² + c⊥ μ): `c` the curvature drift, `cperp` the ∇B drift (in 1/ρ_i,
+B = 1 units; a low-β torus has c = c⊥ = 1/(B R)). `alpha` multiplies ω_D in the drive numerator: 0 is gyrokinetic,
+1 is bslLD's prescribed drift (the drift does no work against E; electrostatic only).
+
+The two settings differ in their numerics:
+- **c = c⊥ = 0** (default): both velocity integrals are exact (Z functions; Γ₀, Weber's integral radially), for any
+  Im ω; `alpha` and `nmu` are unused.
+- **with drift**: the v∥ average stays exact (`polynomial_average`), μ is an `nmu`-point Gauss–Laguerre quadrature,
+  which must also resolve the oscillation of J₀²(k⊥ρ√(2μ)): `nmu` ≳ (k⊥ρ_s)² (at k⊥ρ_s = 10, 64 nodes are 15% off the
+  exact path, the default 128 agree to 1e-14).
+
+Signs: the ∇B drift of a slab with B(x) is ω = k_y (T/q) μ ∂x ln B, so c⊥ = -∂x ln B; an equilibrium in
+pressure balance has c⊥ = `pressure_balance_cperp(species, β)` and c = 0 (no curvature). Bad curvature of a torus
+(outboard midplane, x outward) is c = c⊥ = 1/R > 0. The diamagnetic drive keeps the gradient of F at fixed
+energy, as in flux-tube gyrokinetics: ∇B enters only through ω_D.
+
+Electromagnetic: the p = 0 term of the hot tensor (exact without drift; with the drift in its denominator and the
+gyrocentre drift current per μ node), plus the lowest-order polarisation and E×B, which the drift does not change at
+this order. With drift the gradient drive is in the integrand (ω - ω_*(v)).
+
+With drift, the μ integrand has a pole at ω + k_y c⊥ μ ≈ 0, i.e. a distance ~|ω/(k_y c⊥)| from the real axis, which
+Gauss–Laguerre resolves only geometrically: for k_y c = 0.01, ω = -0.03 + 0.01i the relative error of the
+response is 1e-3 (nmu = 24), 2e-4 (40), 1.4e-5 (80), 3e-7 (160), 1e-9 (320). Check `nmu` for ω_D ~ ω.
+Below the real axis: each node μ_k has a branch point at real ω = k_z² v_t²/(4 k_y τ c) - k_y τ c⊥ μ_k (lab units,
+τ = T_s/q_s) with its cut
+hanging down, so the μ integral's continuum of drift resonances becomes `nmu` cuts. For Im ω < 0 with Re ω
+in the range of these points the response is a quadrature artefact (depends on `nmu`), not the continuation
+of the μ integral. Trust Im ω > 0; check `nmu` convergence for damped drift modes.
 """
-struct Gyrokinetic <: AbstractResponse end
+struct Gyrokinetic <: AbstractResponse
+    c::Float64
+    cperp::Float64
+    alpha::Float64
+    mu::Vector{Float64}
+    wmu::Vector{Float64}
+end
+function Gyrokinetic(; c = 0.0, cperp = c, alpha = 0.0, nmu = 128)
+    mu, wmu = gauss_laguerre(nmu)                    # drift.jl
+    return Gyrokinetic(float(c), float(cperp), float(alpha), mu, wmu)
+end
+
+"Whether a `Gyrokinetic` response carries a magnetic drift (and so uses the μ quadrature)."
+hasdrift(r::Gyrokinetic) = r.c != 0 || r.cperp != 0
 
 """
     GordeyevIntegral(; tmax_factor = 40)
@@ -105,7 +145,8 @@ end
 
 gordeyev(r::GordeyevSeries, ω, k::Wavevector) = _series(ω, k, _harmonics(r, kperp(k)^2))
 
-gordeyev(::Gyrokinetic, ω, k::Wavevector) = _series(ω, k, 0:0)
+gordeyev(r::Gyrokinetic, ω, k::Wavevector) =
+    hasdrift(r) ? throw(ArgumentError("Gyrokinetic with a magnetic drift has no Gordeyev sum")) : _series(ω, k, 0:0)
 
 gordeyev(::DriftKinetic, ω, k::Wavevector) = _series(ω, Wavevector(0.0, 0.0, k.kz), 0:0)   # Γ₀(0) = 1
 gordeyev(::Cold, ω, k::Wavevector) = throw(ArgumentError("Cold has no Gordeyev sum (its charge response is the fluid one)"))
@@ -273,14 +314,15 @@ _susceptibility(r::GordeyevSeries, ω, k::Wavevector) = first(_tensor_series(ω,
 # Gyrokinetic limit of the hot tensor: the p = 0 term exactly; p ≠ 0 to lowest order in ω (ω ≪ Ω, k∥v_t ≪ Ω):
 # M_xx += ω² (1 - Γ₀)/b, M_yy += ω² Σ_{p≠0} (Γ_p/b - 2b Γ_p'/p²), M_xy += -iω Γ₀' (polarisation, E×B with FLR).
 # The p ≠ 0 parts of xz, yz, zz are O(ω k∥v_t, ω²) and dropped.
-function susceptibility_T(::Gyrokinetic, ω, k::Wavevector)
+function susceptibility_T(r::Gyrokinetic, ω, k::Wavevector)
+    hasdrift(r) && throw(ArgumentError("Gyrokinetic with a magnetic drift needs the lab k_y: use susceptibility(species, ω, k)"))
     M0, M0T = _tensor_series(ω, k, 0:0, Val(true))
     Mp, MpT = _gyrokinetic_polarization_T(ω, k)
     return M0 + Mp, M0T + MpT
 end
 
-# The p ≠ 0 part of `Gyrokinetic` (polarisation, E×B with FLR) and its temperature derivative; shared with
-# `GyrokineticDrift`, whose drift does not enter it at this order.
+# The p ≠ 0 part of `Gyrokinetic` (polarisation, E×B with FLR) and its temperature derivative; the magnetic drift
+# does not enter it at this order.
 function _gyrokinetic_polarization_T(ω, k::Wavevector)
     b = kperp(k)^2
     P, PT = _one_minus_Gamma0_over_b(b)
