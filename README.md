@@ -57,7 +57,7 @@ Which response works with which model:
 | `GordeyevSeries(; pmax = nothing)` | full orbit, all cyclotron harmonics (`pmax` truncates) | ✓ | ✓ | ✓ (fixed `pmax`) |
 | `GordeyevIntegral()` | the same as an orbit integral (validation) | ✓ | ✓ | (not planned) |
 | `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω | ✓ | ✓ | ✓ |
-| `GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 64)` | `Gyrokinetic` with the magnetic drift ω_D (toroidal ITG) | ✓ | – | ✓ |
+| `GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 128)` | `Gyrokinetic` with the magnetic drift ω_D (toroidal ITG) | ✓ | – | ✓ |
 | `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
 | `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | ✓ |
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
@@ -93,6 +93,12 @@ find_modes(itg, Wavevector(ky = 0.5, kz = 0.01); re = -0.1:0.02:0.0, imag = (0.0
 Stability boundaries. D is affine in the gradients of each species, and these act on species 1 unless
 `species = i` is given:
 
+```julia
+critical_kappaT(model, k, 0.23, 1)                     # smallest κT for an unstable p = 1 root at κn = 0.23
+neutral_gradients(model, 1.05, k)                      # (κn, κT) that put a root exactly at ω = 1.05
+with_gradients(model; κn = 0.1, κT = 0.5)              # the same model with other gradients
+```
+
 Toroidal ITG: `GyrokineticDrift` adds the curvature and ∇B drift ω_D = −k_y (T/q)(c v∥²/v_t² + c⊥ μ),
 c = 1/(BR) in 1/ρ_i (c > 0 is bad curvature, ω_D along the ion diamagnetic direction for κ < 0):
 
@@ -104,17 +110,12 @@ find_modes(Model((ion, Species(q = -1, response = Boltzmann())), Quasineutrality
 
 - The v∥ average is exact for any Im ω (two Z functions, `quadratic_average`); v⊥ is an `nmu`-point
   Gauss–Laguerre quadrature in μ = v⊥²/2v_t². **Converge `nmu`** when ω_D ~ ω: the μ integrand has a pole at a
-  distance ~|ω/(k_y c⊥)| from the real axis (error 1e-3 at `nmu` = 24, 1.4e-5 at 80, 1e-9 at 320 for k_y c = 0.01).
+  distance ~|ω/(k_y c⊥)| from the real axis (error 1e-3 at `nmu` = 24, 1.4e-5 at 80, 1e-9 at 320 for k_y c = 0.01),
+  and at large k⊥ρ the oscillation of J₀² needs `nmu` ≳ (k⊥ρ_s)² (at k⊥ρ_s = 10: 64 nodes 15% off `Gyrokinetic`, 128 exact).
 - Below the real axis the quadrature turns the continuum of drift resonances into `nmu` cuts at real
-  ω = k_z²/(4 k_y c) − k_y c⊥ μ_k: damped drift modes there depend on `nmu`. Trust Im ω > 0, converge `nmu` otherwise.
+  ω = k_z² v_t²/(4 k_y τ c) − k_y τ c⊥ μ_k (τ = T/q): damped drift modes there depend on `nmu`. Trust Im ω > 0, converge `nmu` otherwise.
 - `alpha = 1` puts ω_D in the drive numerator as well (bslLD's prescribed drift, which does no work against E);
   `alpha = 0` is gyrokinetic. Electrostatic only.
-
-```julia
-critical_kappaT(model, k, 0.23, 1)                     # smallest κT for an unstable p = 1 root at κn = 0.23
-neutral_gradients(model, 1.05, k)                      # (κn, κT) that put a root exactly at ω = 1.05
-with_gradients(model; κn = 0.1, κT = 0.5)              # the same model with other gradients
-```
 
 ## Local electromagnetic modes
 

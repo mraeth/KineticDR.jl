@@ -178,14 +178,10 @@ function radial_field(g::RadialGrid, φ::AbstractVector)
     return ScalarField(g.bc === :dirichlet ? vcat(zero(eltype(φ)), φ) : Vector(φ))
 end
 
-# With the magnetic drift (p = 0): W = ⟨(ω - α ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩, ω_D = -k_y (T/q)(c s² + c⊥ μ), c, c⊥ in
-# lab units (`GyrokineticDrift`).
+# With the magnetic drift (p = 0): the local `drift_vpar` in the species' own units.
 function vpar_response(k::Wavevector, s::Species{GyrokineticDrift}, ω, mu)
-    r, τ = s.response, s.T / s.q
-    a = k.ky * τ * r.c
-    n0 = ω - τ * k.ky * (s.κn + s.κT * (mu - 1.5)) + r.alpha * k.ky * τ * r.cperp * mu
-    n2 = -τ * k.ky * s.κT / 2 + r.alpha * a
-    return quadratic_average(n0, n2, a, abs(k.kz) * thermal_speed(s), ω + k.ky * τ * r.cperp * mu)
+    Ω, ks = _species_units(s, k)
+    return drift_vpar(own_units(s.response, s), ω / Ω, ks, _drive(s, k, Ω)..., mu)
 end
 
 # W_p = ⟨(ω - ω_*)/(ω - p|Ω| - k_z v∥)⟩ over v∥ for local species `s` at one μ, harmonic p: with
@@ -195,12 +191,8 @@ function vpar_response(k::Wavevector, s::Species, ω, mu, p::Integer = 0)
     dia = s.T / s.q * k.ky
     n0 = ω - dia * (s.κn + s.κT * (mu - 1.5))
     n2 = -dia * s.κT / 2
-    ω′ = ω - p * abs(cyclotron_frequency(s))
-    b = abs(k.kz) * thermal_speed(s)
-    b == 0 && return (n0 + n2) / ω′
-    a = 1 / (sqrt(2.0) * b)
-    ζ = a * ω′
-    return -a * (n0 * plasma_Z(ζ) + 2n2 * ζ * one_plus_zZ(ζ))
+    I0, I2 = linear_moments(ω - p * abs(cyclotron_frequency(s)), abs(k.kz) * thermal_speed(s))
+    return n0 * I0 + n2 * I2
 end
 
 """
@@ -284,6 +276,9 @@ end
 struct QuadratureOperator{S,T} <: RadialKernel
     ss::Vector{S}
     J::Vector{Matrix{T}}
+    d::Vector{ComplexF64}        # buffers: the diagonal, D J and the sum
+    DJ::Matrix{ComplexF64}
+    M::Matrix{ComplexF64}
 end
 
 function QuadratureOperator(g::RadialGrid, k::Wavevector, ss)
@@ -292,15 +287,20 @@ function QuadratureOperator(g::RadialGrid, k::Wavevector, ss)
         G = [g.C[j, l] * besselj0(hypot(g.k[l], k.ky) * sqrt(2mu * s.T * s.m) / abs(s.q)) for (j, s) in enumerate(ss), l in eachindex(g.k)]
         G * g.Cinv
     end
-    return QuadratureOperator(ss, J)
+    N = length(g.x)
+    return QuadratureOperator(ss, J, zeros(ComplexF64, N), zeros(ComplexF64, N, N), zeros(ComplexF64, N, N))
 end
 
 function kinetic_operator!(K::QuadratureOperator, g::RadialGrid, k::Wavevector, ω)
-    A = zeros(ComplexF64, length(g.x), length(g.x))
+    fill!(K.M, 0)
     for (J, mu, w) in zip(K.J, K.ss[1].response.mu, K.ss[1].response.wmu)
-        A .+= J' * Diagonal([w * s.q^2 * s.N / s.T * vpar_response(k, s, ω, mu) for s in K.ss]) * J
+        for (j, s) in enumerate(K.ss)
+            K.d[j] = w * s.q^2 * s.N / s.T * vpar_response(k, s, ω, mu)
+        end
+        mul!(K.DJ, Diagonal(K.d), J)
+        mul!(K.M, J', K.DJ, true, true)
     end
-    return A
+    return K.M
 end
 
 # Species without finite Larmor radius (`DriftKinetic`, `Cold`): local in x except for the polarisation charge,
@@ -376,7 +376,8 @@ radial_key(r::Union{Gyrokinetic,GordeyevSeries}) = harmonics(r)
 radial_key(r::GyrokineticDrift) = (GyrokineticDrift, r.mu)
 
 # Real frequencies at which a kernel's response has a pole (the `eigenmode` guess must avoid them)
-pole_frequencies(K::QuadratureOperator, k::Wavevector) = k.kz == 0 ? [0.0] : Float64[]
+# With drift the real singular points are a continuum of branch points (one per μ node, any k_z): none to exclude
+pole_frequencies(K::QuadratureOperator, k::Wavevector) = Float64[]
 pole_frequencies(K::WeberOperator, k::Wavevector) =
     k.kz == 0 ? [p * abs(cyclotron_frequency(K.ss[1])) for p in -K.P:K.P] : Float64[]
 # A cold species has poles at any k_z: its drive ∝ 1/ω and its polarisation weight 1/(1 - ω²/Ω²)

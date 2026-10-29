@@ -912,16 +912,37 @@ end
             exp(-v^2 / 2) / sqrt(2π) * (ωe - ωD - ωs) / (ωe - ke.kz * vt * v - ωD)
         end, -14, 14; rtol = 1e-12)[1], 0, 5, 20, 60; rtol = 1e-11)[1]
     @test nonadiabatic_response(e, ωe, ke) ≈ We rtol = 1e-6
-    # c → 0 is Gyrokinetic
-    g = Species(κT = -0.3, response = Gyrokinetic())
-    d = Species(κT = -0.3, response = GyrokineticDrift(c = 1e-12, nmu = 32))
-    @test nonadiabatic_response(d, ω, k) ≈ nonadiabatic_response(g, ω, k) rtol = 1e-9
-    # toroidal ITG roots (R/L_T = 8, R/L_n = 2, adiabatic electrons), regression values of the snapshot b5fc4f4
+    # c = 0 is Gyrokinetic (the exact a = 0 branch), also at k⊥ρ = 10 with the default nmu
+    for kk in (k, Wavevector(ky = 10.0, kz = 0.02))
+        g = Species(κT = -0.3, response = Gyrokinetic())
+        d = Species(κT = -0.3, response = GyrokineticDrift(c = 0.0))
+        @test nonadiabatic_response(d, ω, kk) ≈ nonadiabatic_response(g, ω, kk) rtol = 1e-12
+    end
+    # -k_y mirror: W(-k_y, -ω*) = W(k_y, ω)*, both α, both signs of the charge
+    for alpha in (0.0, 1.0), q in (1, -1)
+        s = Species(; q, κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02, cperp = 0.03, alpha = alpha))
+        @test nonadiabatic_response(s, -conj(ω), Wavevector(ky = -ky, kz = 0.02)) ≈ conj(nonadiabatic_response(s, ω, k)) rtol = 1e-13
+    end
+    # nmu convergence near the drift pole (k_y c = 0.01): geometric, 4e-5 at 64 and 1e-6 at 128 nodes
+    sn(n) = Species(κn = -0.04, κT = -0.16, response = GyrokineticDrift(c = 0.02, nmu = n))
+    Wref = nonadiabatic_response(sn(512), ω, k)
+    err(n) = abs(nonadiabatic_response(sn(n), ω, k) - Wref) / abs(Wref)
+    @test err(64) < 1e-4 && err(128) < 3e-6 && err(256) < 0.05 * err(128)
+    # toroidal ITG roots (R/L_T = 8, R/L_n = 2, adiabatic electrons, k_z = 0), regression values of the snapshot
+    # b5fc4f4, checked against the independent double quadrature in (v∥, μ): a Newton step on W - 2 = 0 from the
+    # stored root is below 1e-9
     for (alpha, ref) in ((0.0, -0.0289898331 + 0.0130943411im), (1.0, -0.0216328565 + 0.0162489625im))
         ion = Species(κn = -2 / 50, κT = -8 / 50, response = GyrokineticDrift(c = 1 / 50, alpha = alpha, nmu = 160))
         m = Model((ion, adiabatic_electrons()), Quasineutrality())
         ω0 = find_modes(m, Wavevector(ky = 0.5); re = -0.06:0.01:0.0, imag = (0.002, 0.01, 0.02), imin = 0.0)[1]
         @test ω0 ≈ ref atol = 1e-8
+        Db(w) = quadgk(μ -> exp(-μ) * KD.besselj0(0.5 * sqrt(2μ))^2 * quadgk(v -> begin
+                ωD = -0.5 * (v^2 + μ) / 50
+                ωs = 0.5 * (-2 / 50 + -8 / 50 * (μ + v^2 / 2 - 1.5))
+                exp(-v^2 / 2) / sqrt(2π) * (w - alpha * ωD - ωs) / (w - ωD)
+            end, -12, 12; rtol = 1e-12)[1], 0, 40; rtol = 1e-11)[1] - 2
+        h = 1e-5
+        @test abs(Db(ref) / ((Db(ref + h) - Db(ref - h)) / 2h)) < 1e-9
     end
     # electrostatic only
     @test_throws ArgumentError dispersion(Model((Species(response = GyrokineticDrift(c = 0.02)), Species(q = -1, m = 1 / 1836)),

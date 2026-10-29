@@ -36,60 +36,38 @@ end
 # √z with the cut on the negative imaginary axis: analytic across the real axis.
 sqrt_cut(z) = (r = sqrt(-im * z); r * sqrt(complex(im)))
 
-# ⟨1/(ω - q s)⟩ and ⟨s²/(ω - q s)⟩ for s ~ N(0, 1), continued to Im ω < 0 like Z.
+# ⟨1/(ω - q s)⟩ and ⟨s²/(ω - q s)⟩ for s ~ N(0, 1), continued to Im ω < 0 like Z: -a Z(ζ) and -2a ζ (1 + ζZ(ζ)),
+# a = 1/(√2|q|), ζ = aω; 1/ω for q = 0.
 function linear_moments(ω, q)
-    q = abs(q)
-    ζ = ω / (sqrt(2.0) * q)
-    if !(abs(ζ) < 6)                              # also q == 0: asymptotic series Σ (2n∓1)!! r^n, summed to
-        r = (q / ω)^2                             # its smallest term (≲ e^{-36} at |ζ| = 6)
-        t0, t2 = one(r), one(r)
-        s0, s2 = t0, t2
-        for n in 1:40
-            t0 *= (2n - 1) * r
-            t2 *= (2n + 1) * r
-            s0 += t0
-            s2 += t2
-            abs(t2) < 1e-17 * abs(s2) && break
-        end
-        I0, I2 = s0 / ω, s2 / ω
-        if q > 0 && imag(ζ) < 0                   # Landau term 2i√π e^{-ζ²} of Z below the real axis
-            L = -im * sqrt(2π) / q * exp(-ζ^2)
-            I0 += L
-            I2 += (ω / q)^2 * L
-        end
-        return I0, I2
-    end
-    I0 = -plasma_Z(ζ) / (sqrt(2.0) * q)
-    return I0, (ω / q)^2 * I0 - ω / q^2
+    q == 0 && return (1 / ω, 1 / ω)
+    a = 1 / (sqrt(2.0) * abs(q))
+    ζ = a * ω
+    return -a * plasma_Z(ζ), -2a * ζ * one_plus_zZ(ζ)
 end
 
-"""
-Gauss–Laguerre nodes and weights for ∫₀^∞ e^{-μ} f(μ) dμ (Golub–Welsch). Cached per `n` (responses are
-rebuilt at every radius of a profile); the returned vectors are shared, do not mutate them.
-"""
-gauss_laguerre(n::Integer) = lock(() -> get!(() -> _gauss_laguerre(n), GAUSS_LAGUERRE, Int(n)), GAUSS_LAGUERRE_LOCK)
-const GAUSS_LAGUERRE = Dict{Int,Tuple{Vector{Float64},Vector{Float64}}}()
-const GAUSS_LAGUERRE_LOCK = ReentrantLock()
-function _gauss_laguerre(n)
+"Gauss–Laguerre nodes and weights for ∫₀^∞ e^{-μ} f(μ) dμ (Golub–Welsch)."
+function gauss_laguerre(n::Integer)
     J = SymTridiagonal([2k + 1.0 for k in 0:(n - 1)], [Float64(k) for k in 1:(n - 1)])
     E = eigen(J)
     return E.values, E.vectors[1, :] .^ 2
 end
 
 """
-    GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 64)
+    GyrokineticDrift(; c, cperp = c, alpha = 0, nmu = 128)
 
 Gyrokinetic response (J₀², no cyclotron harmonics) with the magnetic drift
 ω_D = -k_y (T_s/q_s) (c v∥²/v_ts² + c⊥ μ), c = 1/(B R) for curvature and ∇B (`c`, `cperp` in 1/ρ_i,
 B = 1 units). `alpha` multiplies ω_D in the drive numerator: 0 is gyrokinetic, 1 is bslLD's
 prescribed drift (the drift does no work against E). v⊥ by `nmu`-point Gauss–Laguerre in μ.
-`c = cperp = 0` is `Gyrokinetic` up to the μ quadrature.
+`c = cperp = 0` is `Gyrokinetic` up to the μ quadrature, which must resolve the oscillation of J₀²(k⊥ρ√(2μ)):
+`nmu` ≳ (k⊥ρ_s)². At k⊥ρ_s = 10, 64 nodes are 15% off `Gyrokinetic`, the default 128 agree to 1e-14.
 
 The μ integrand has a pole at ω + k_y c⊥ μ ≈ 0, i.e. a distance ~|ω/(k_y c⊥)| from the real axis, which
 Gauss–Laguerre resolves only geometrically: for k_y c = 0.01, ω = -0.03 + 0.01i the relative error of the
 response is 1e-3 (nmu = 24), 2e-4 (40), 1.4e-5 (80), 3e-7 (160), 1e-9 (320). Check `nmu` for ω_D ~ ω.
 
-Below the real axis: each node μ_k has a branch point at real ω = k_z²/(4 k_y c) - k_y c⊥ μ_k with its cut
+Below the real axis: each node μ_k has a branch point at real ω = k_z² v_t²/(4 k_y τ c) - k_y τ c⊥ μ_k
+(lab units, τ = T_s/q_s) with its cut
 hanging down, so the μ integral's continuum of drift resonances becomes `nmu` cuts. For Im ω < 0 with Re ω
 in the range of these points the response is a quadrature artefact (depends on `nmu`), not the continuation
 of the μ integral. Trust Im ω > 0; check `nmu` convergence for damped drift modes.
@@ -101,26 +79,26 @@ struct GyrokineticDrift <: AbstractResponse
     mu::Vector{Float64}
     wmu::Vector{Float64}
 end
-function GyrokineticDrift(; c, cperp = c, alpha = 0.0, nmu = 64)
+function GyrokineticDrift(; c, cperp = c, alpha = 0.0, nmu = 128)
     mu, wmu = gauss_laguerre(nmu)
     return GyrokineticDrift(float(c), float(cperp), float(alpha), mu, wmu)
 end
 
 gordeyev(::GyrokineticDrift, args...) =
-    error("GyrokineticDrift has no Gordeyev sum; use nonadiabatic_response")
+    throw(ArgumentError("GyrokineticDrift has no Gordeyev sum; use nonadiabatic_response"))
 
-# Own units (|Ω_s| = ρ_ts = 1): ω_D = -k_y (c s² + c⊥ μ). `c` here is already the species' own c.
+# Own units (|Ω_s| = ρ_ts = v_ts = 1): ω_D = -k_y (c s² + c⊥ μ), `c` already the species' own c. The v∥ average at
+# one μ, W_μ = ⟨(ω - α ω_D - ω_*)/(ω - k_z v∥ - ω_D)⟩, shared by the local response and the radial kernel.
+function drift_vpar(r::GyrokineticDrift, ω, k::Wavevector, ωn, ωT, μ)
+    a = k.ky * r.c
+    n0 = ω - ωn - ωT * (μ - 1.5) + r.alpha * k.ky * r.cperp * μ
+    n2 = -ωT / 2 + r.alpha * a
+    return quadratic_average(n0, n2, a, abs(k.kz), ω + k.ky * r.cperp * μ)
+end
+
 function nonadiabatic_response(r::GyrokineticDrift, ω, k::Wavevector, ωn::Number, ωT::Number)
-    ky, kz, kp = k.ky, k.kz, kperp(k)
-    a, b = ky * r.c, abs(kz)
-    acc = zero(complex(ω))
-    for (μ, w) in zip(r.mu, r.wmu)
-        e = ω + ky * r.cperp * μ
-        n0 = ω - ωn - ωT * (μ - 1.5) + r.alpha * ky * r.cperp * μ
-        n2 = -ωT / 2 + r.alpha * a
-        acc += w * besselj0(kp * sqrt(2μ))^2 * quadratic_average(n0, n2, a, b, e)
-    end
-    return acc
+    kp = kperp(k)
+    return sum(w * besselj0(kp * sqrt(2μ))^2 * drift_vpar(r, ω, k, ωn, ωT, μ) for (μ, w) in zip(r.mu, r.wmu))
 end
 
 # ω_D/|Ω_s| = -k_y,s sgn(q_s) ρ_ts (c s² + c⊥ μ): c is a lab quantity, rescale to the species' units.
