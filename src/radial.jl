@@ -107,9 +107,8 @@ function exponential_dispersion(ω, kxp, ky, kz; κn, T = 1.0, Te = 1.0)
 end
 
 # Adiabatic term q² ∫F d³v / T at the node: exact for a guiding-centre profile, N/T at the node for a
-# uniform or a Boltzmann species; none for a cold fluid.
+# uniform or a Boltzmann species.
 adiabatic_term(s::Species, x) = s.q^2 * s.N / s.T
-adiabatic_term(s::Species{Cold}, x) = 0.0
 function adiabatic_term(sp, x)
     s = sp(x)
     s.response isa Boltzmann && return adiabatic_term(s, x)
@@ -221,7 +220,9 @@ end
 #   M[l, l'] = Σ_p e^{iσp(θ_l - θ_l')} Σ_j conj(C[j, l]) w_j (r0_pj W0_|p|[ρ_j, l, l'] + r1_pj W1_|p|[ρ_j, l, l']) C[j, l'],
 # W0, W1 = weber(p, k⊥_l ρ_j, k⊥_l' ρ_j), ρ_j = √(T m)/|q| at node j: even in p, ω-independent, one table per
 # |p| and distinct ρ_j (a single one for uniform T).
-struct WeberOperator{S}
+abstract type RadialKernel end
+
+struct WeberOperator{S} <: RadialKernel
     ss::Vector{S}
     P::Int
     σ::Int
@@ -264,28 +265,54 @@ function WeberOperator(g::RadialGrid, k::Wavevector, ss, P)
 end
 
 # Species without finite Larmor radius (`DriftKinetic`, `Cold`): local in x except for the polarisation charge,
-#   A_s(ω) = -diag(charge_response(s(x_j), ω, k_x = 0)) + w_s(ω) X,   X = -c ∂x²,  c = N m at the node,
-# w_s = `polarization_weight`, so that a uniform profile gives -charge_response at k_x = k_m on the basis. X is the
-# Boussinesq form of -∂x c ∂x, as in the local models: the polarisation current across the density gradient is dropped.
-struct PolarizationOperator{S}
+#   A_s(ω) = -diag(charge_response(s(x_j), ω, k_x = 0)) + w_s(ω) X,   X = -∂x c ∂x = -c ∂x² - c' ∂x,  c = N m,
+# w_s = `polarization_weight`, c' = c κn from the species, ∂x and ∂x² spectral on the basis. A uniform profile gives
+# -charge_response at k_x = k_m on the basis; with a gradient X is the flux form, the ρ → 0 limit of the gyrokinetic
+# kernel (the local models' Boussinesq -c ∂x² cannot carry c' ∂x). X = nothing without polarisation (w ≡ 0).
+struct PolarizationOperator{S} <: RadialKernel
     ss::Vector{S}
-    X::Matrix{Float64}
+    X::Union{Nothing,Matrix{Float64}}
 end
 
 function PolarizationOperator(g::RadialGrid, ss)
     check_charge_mass(ss)
-    D2 = real.(g.C * Diagonal(-g.k .^ 2) * g.Cinv)
-    return PolarizationOperator(ss, -Diagonal([s.N * s.m for s in ss]) * D2)
+    iszero(polarization_weight(ss[1].response, 0.0)) && return PolarizationOperator(ss, nothing)
+    D1, D2 = derivative_matrices(g)
+    c = [s.N * s.m for s in ss]
+    return PolarizationOperator(ss, -Diagonal(c) * D2 - Diagonal(c .* [s.κn for s in ss]) * D1)
 end
 
-function polarization_operator!(A, L::PolarizationOperator, k::Wavevector, ω)
-    A .+= polarization_weight(L.ss[1], ω) .* L.X
+# Spectral ∂x and ∂x² at the nodes: derivatives of the basis interpolant (cos ↔ sin for the standing waves; the
+# periodic Nyquist mode has no real derivative and gets none).
+function derivative_matrices(g::RadialGrid)
+    a, J, M = first(g.grid.xaxes[1]), eachindex(g.x), eachindex(g.k)
+    dC = g.bc === :periodic ? g.C * Diagonal(im .* g.k) :
+         g.bc === :dirichlet ? [g.k[m] * cos(g.k[m] * (g.x[j] - a)) for j in J, m in M] :
+         [-g.k[m] * sin(g.k[m] * (g.x[j] - a)) for j in J, m in M]
+    return real.(dC * g.Cinv), real.(g.C * Diagonal(-g.k .^ 2) * g.Cinv)
+end
+
+# Adds the kernel's -charge on the nodes to A
+add_kernel!(A, K::WeberOperator, g::RadialGrid, k::Wavevector, ω) = (A .-= kinetic_operator!(K, g, k, ω))
+function add_kernel!(A, L::PolarizationOperator, g::RadialGrid, k::Wavevector, ω)
+    L.X === nothing || (A .+= polarization_weight(L.ss[1], ω) .* L.X)
     k0 = Wavevector(0.0, k.ky, k.kz)
     for (j, s) in enumerate(L.ss)
         A[j, j] -= charge_response(s, ω, k0)
     end
     return A
 end
+
+# Adiabatic terms a_s the workspace puts on the diagonal (Boltzmann: no kernel); `charge_response` holds them for the
+# species without Larmor radius
+adiabatic_terms(K, sp, g::RadialGrid) = [adiabatic_term(sp, x) for x in g.x]
+adiabatic_terms(::PolarizationOperator, sp, g::RadialGrid) = zeros(length(g.x))
+
+# ω-independent size of a kernel beyond its adiabatic terms (convergence test in `eigenmode`): for the species without
+# Larmor radius, the polarisation charge at k_x ~ 1 and q²N/T (none for a cold fluid)
+kernel_scale(K, k::Wavevector) = 0.0
+kernel_scale(L::PolarizationOperator, k::Wavevector) = maximum(s -> polarization_weight(s, 0.0) * s.N * s.m * (k.ky^2 + 1) +
+                                                                    (s.response isa Cold ? 0.0 : s.q^2 * s.N / s.T), L.ss)
 
 # Radial kernel of a species, by its response (the same at every x): `nothing` for `Boltzmann` (adiabatic term only),
 # a `WeberOperator` for the kinetic responses, a `PolarizationOperator` for those without Larmor radius.
@@ -306,6 +333,7 @@ radial_key(r::Union{Gyrokinetic,GordeyevSeries}) = harmonics(r)
 # Real frequencies at which a kernel's response has a pole (the `eigenmode` guess must avoid them)
 pole_frequencies(K::WeberOperator, k::Wavevector) =
     k.kz == 0 ? [p * abs(cyclotron_frequency(K.ss[1])) for p in -K.P:K.P] : Float64[]
+# A cold species has poles at any k_z: its drive ∝ 1/ω and its polarisation weight 1/(1 - ω²/Ω²)
 function pole_frequencies(L::PolarizationOperator, k::Wavevector)
     s = L.ss[1]
     s.response isa Cold && return [0.0, abs(cyclotron_frequency(s)), -abs(cyclotron_frequency(s))]
@@ -316,8 +344,7 @@ struct RadialWorkspace{G,M}
     g::G
     m::M
     k::Wavevector{Float64}
-    kinetic::Vector{WeberOperator}
-    polarization::Vector{PolarizationOperator}
+    kernels::Vector{RadialKernel}
     diag::Vector{Float64}    # adiabatic terms Σ_s a_s at the nodes
     fieldop::Matrix{Float64} # field terms (Poisson λ²k², real in every basis), zero for quasineutrality
     scale::Float64           # ω-independent scale of A (convergence test in `eigenmode`)
@@ -334,8 +361,7 @@ function RadialWorkspace(g::RadialGrid, m::Model, k::Wavevector)
     fieldop = field_operator(m.field, g, k)
     N = length(g.x)
     diag = zeros(N)
-    kinetic = WeberOperator[]
-    polarization = PolarizationOperator[]
+    kernels = RadialKernel[]
     scale = opnorm(fieldop, 1)
     for sp in m.species
         ss = [species_at(sp, x) for x in g.x]
@@ -343,16 +369,11 @@ function RadialWorkspace(g::RadialGrid, m::Model, k::Wavevector)
             "radial problem: a species needs the same response at every x; got $(unique(string.(getfield.(ss, :response))))"))
         g.bc === :periodic && check_periodic(g, sp)
         K = radial_kernel(ss[1].response, g, k, ss)
-        if K isa PolarizationOperator
-            push!(polarization, K)
-            # ω-independent size: the polarisation charge at k_x ~ 1 and the adiabatic term
-            scale += maximum(s -> polarization_weight(s, 0.0) * s.N * s.m * (k.ky^2 + 1) + adiabatic_term(s, 0.0), ss)
-            continue
-        end
-        diag .+= [adiabatic_term(sp, x) for x in g.x]
-        K === nothing || push!(kinetic, K)
+        diag .+= adiabatic_terms(K, sp, g)
+        scale += kernel_scale(K, k)
+        K === nothing || push!(kernels, K)
     end
-    return RadialWorkspace(g, m, k, kinetic, polarization, diag, fieldop, scale + maximum(abs, diag))
+    return RadialWorkspace(g, m, k, kernels, diag, fieldop, scale + maximum(abs, diag))
 end
 
 # A periodic basis needs periodic profiles: the species at both walls must agree (to 1e-6: κ of a numerically
@@ -375,11 +396,8 @@ function operator(g::RadialGrid, m::Model, k::Wavevector, ω::Number, ws = Radia
     (ws.g === g && ws.m === m && ws.k == k) ||
         throw(ArgumentError("the workspace was built for another grid, model or wavevector"))
     A = complex(ws.fieldop)
-    for K in ws.kinetic
-        A .-= kinetic_operator!(K, g, ws.k, ω)
-    end
-    for L in ws.polarization
-        polarization_operator!(A, L, ws.k, ω)
+    for K in ws.kernels
+        add_kernel!(A, K, g, ws.k, ω)
     end
     for j in eachindex(g.x)
         A[j, j] += ws.diag[j]
@@ -440,8 +458,9 @@ end
     eigenmode(g, m, k, ω0; tol = 1e-10, ltol = 1e-8, maxit = 60) -> (; ω, φ, λ, converged)
 
 Secant iteration on λ_min(A(ω)) = 0 from the guess `ω0`, tracking the eigenvalue closest to zero.
-`converged` needs the step below `tol |ω|` and |λ| ≤ `ltol` s, s = max|a_s| + ‖field terms‖₁ (+ polarisation charge at k_x ~ 1) the
-ω-independent scale of A (a jump between eigenvalue branches can stall the step away from a root), and
+`converged` needs the step below `tol |ω|` and |λ| ≤ `ltol` s, with s the ω-independent scale of A: max over x of
+the summed adiabatic terms, plus ‖field terms‖₁, plus for each species without Larmor radius its polarisation charge
+at k_x ~ 1 and q²N/T (a jump between eigenvalue branches can stall the step away from a root), and
 λ resolved: 100 eps ‖A‖₁ ≤ `ltol` s (far below the real axis ‖A‖ grows like e^{ζ²}).
 It is algebraic convergence for this grid: below the real axis the discretised continuum has
 eigenvalues that move with N, so check damped modes by refining the grid. An iteration that leaves
@@ -451,7 +470,7 @@ max |φ| = 1 and real at the maximum.
 function eigenmode(g::RadialGrid, m::Model, k::Wavevector, ω0::Number; tol = 1e-10, ltol = 1e-8, maxit = 60,
                    ws = RadialWorkspace(g, m, k))
     isfinite(ω0) || throw(ArgumentError("eigenmode: the guess ω0 = $ω0 is not finite"))
-    any(K -> ω0 in pole_frequencies(K, k), Iterators.flatten((ws.kinetic, ws.polarization))) &&
+    any(K -> ω0 in pole_frequencies(K, k), ws.kernels) &&
         throw(ArgumentError("eigenmode: ω0 = $ω0 is a pole of a species' response"))
     λ(ω) = first(smallest(operator(g, m, k, ω, ws)))
     a, b = complex(ω0), complex(ω0) * (1 + 1e-3) + 1e-5im

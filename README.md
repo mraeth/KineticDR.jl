@@ -139,7 +139,7 @@ D = dispersion_matrix(em, ω, k)                        # 3×3 𝒟, with 𝒟 �
 
 ## Radial eigenmodes
 
-Gyrokinetic, full-orbit, drift-kinetic or cold species with radial profiles in a shearless slab (B = 1, k∥ = k_z everywhere). Use the same
+Gyrokinetic, full-orbit, drift-kinetic, cold or Boltzmann species with radial profiles in a shearless slab (B = 1, k∥ = k_z everywhere). Use the same
 `Model`, but give a species as a function x → `Species`. The radial grid turns the problem into an
 operator A(ω) acting on φ(x), and an eigenmode is an ω at which A(ω) is singular.
 
@@ -197,11 +197,11 @@ r = find_eigenmode(g, m, k; re = 1.0:0.02:1.1, imag = 0.001:0.002:0.011, starts 
   −k_y), which the tests check, plus the uniform-profile limit; there is no exact non-uniform electron reference.
   `Gyrokinetic` and `GordeyevSeries(pmax = 0)` are the same kernel.
 - **No Larmor radius.** `DriftKinetic` and `Cold` species are local in x except for the polarisation charge
-  −w N m ∂x²φ, w = 1 (`DriftKinetic(polarization = true)`, else 0) or Ω²/(Ω² − ω²) (`Cold`). It is the
-  Boussinesq form of −∂x(N m ∂x φ), and the density gradient is advected by the E×B drift only, as in the local
-  models. The radial full-orbit operator as T → 0 has the exact cold drift w(E_y − iωE_x/Ω)/B instead; the tests
-  add back the two dropped terms, the polarisation current across the gradient and (w − 1) q N κn k_y/ω, and then
-  agree to 1e-5.
+  −w ∂x(N m ∂x φ), w = 1 (`DriftKinetic(polarization = true)`, else 0) or Ω²/(Ω² − ω²) (`Cold`). The flux form
+  carries the polarisation current across the density gradient (the local models' Boussinesq −w N m k⊥² cannot), so
+  it is the ρ → 0 limit of the radial gyrokinetic and full-orbit kernels. The density gradient is advected by the E×B
+  drift only, as in the local models; the radial full-orbit operator as T → 0 has the exact cold drift
+  w(E_y − iωE_x/Ω)/B, and the tests add back its non-E×B drive, (w − 1) q N κn k_y/ω, and then agree to 1e-5.
 - **Walls.** `:dirichlet` puts φ = 0 on both walls (the kinetic wall of the bslLD runs); `:mirror` makes
   φ even about both walls. A mode localised away from the walls must give the same ω with both.
 - **Finding modes.**
