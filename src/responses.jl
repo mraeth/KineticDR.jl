@@ -165,8 +165,12 @@ end
 #   δf = (q/T) F (1 - ω_*(v)/ω) ∫ v'·E dτ + (a term odd in v: no current, the charge `charge_vector`),
 # ω_*(v) = ωn + ωT (v²/2 - 3/2), and v²/2 - 3/2 is T∂_T of the Maxwellian. So
 #   M(ω, k; ωn, ωT) = (1 - ωn/ω) M - (ωT/ω)(M + T∂_T M) + polarisation   (species units, ωn = ω_*/|Ω|),
-# with T∂_T M = ½ d/ds M(ω, s k) at s = 1 (k⊥ρ_t and k∥v_t scale with √T). A response without a temperature
-# (`Cold`) defines the 3- and 5-argument `susceptibility` instead.
+# with T∂_T M = ½ d/ds M(ω, s k) at s = 1 (k⊥ρ_t and k∥v_t scale with √T). Every M passes through
+# `_susceptibility(r, ω, k)` (M without polarisation; `first(susceptibility_T)` unless a response has a cheaper M-only
+# path) and gets `_polarization(r, ω)` added once. A response without a temperature (`Cold`) defines only
+# `_susceptibility`: its Species has no ω_* (`_drive`), its density gradient enters through `charge_vector`.
+# Conventions differ from the electrostatic hook: there the ω_*T weight is S_T itself (W = -(ω - ωn)S + ωT S_T),
+# here it is M + T∂_T M.
 
 """
     susceptibility(r, ω, k[, ωn, ωT]) -> M
@@ -175,7 +179,7 @@ Susceptibility tensor of response `r` in its own units, with the gradient drive 
 (1 - ωn/ω) M - (ωT/ω)(M + T∂_T M) from `susceptibility_T`, plus a polarisation drift that the drive does not weight
 (`DriftKinetic(polarization = true)`).
 """
-susceptibility(r::AbstractResponse, ω, k::Wavevector) = first(susceptibility_T(r, ω, k)) + _polarization(r, ω)
+susceptibility(r::AbstractResponse, ω, k::Wavevector) = _susceptibility(r, ω, k) + _polarization(r, ω)
 function susceptibility(r::AbstractResponse, ω, k::Wavevector, ωn, ωT)
     ωn == 0 && ωT == 0 && return susceptibility(r, ω, k)
     M, MT = susceptibility_T(r, ω, k)
@@ -189,20 +193,15 @@ Susceptibility tensor of response `r` in its own units (frame k⊥ ∥ x̂, posi
 derivative, which carries the drive of a temperature gradient. The electromagnetic interface of a kinetic response.
 """
 susceptibility_T(r::AbstractResponse, ω, k::Wavevector) =
-    throw(ArgumentError("$(nameof(typeof(r))) has no electromagnetic susceptibility"))
+    throw(ArgumentError("$(nameof(typeof(r))) has no electromagnetic susceptibility with a temperature drive"))
+# M without the polarisation; a response with a cheaper M-only path overrides it.
+_susceptibility(r::AbstractResponse, ω, k::Wavevector) = first(susceptibility_T(r, ω, k))
 # Polarisation drift, Boussinesq: M_xx = M_yy = ω² w (`polarization_weight`), not weighted by the gradient drive,
 # as the electrostatic -w N m k⊥².
 _polarization(r::AbstractResponse, ω) = (S = ω^2 * polarization_weight(r, ω); @SMatrix [S 0 0; 0 S 0; 0 0 0])
 
-function susceptibility(r::Cold, ω, k::Wavevector)
-    S, D = ω^2 * polarization_weight(r, ω), ω / (ω^2 - 1)
-    return @SMatrix [S -im*D 0; im*D S 0; 0 0 -one(S)]
-end
-# T = 0: no ω_*; the density gradient enters through the charge (`charge_vector`)
-function susceptibility(r::Cold, ω, k::Wavevector, ωn, ωT)
-    ωT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0"))
-    return susceptibility(r, ω, k)
-end
+# Cold: T = 0, no ω_* (no `susceptibility_T`); the density gradient enters through the charge (`charge_vector`)
+_susceptibility(::Cold, ω, k::Wavevector) = (D = ω / (ω^2 - 1); @SMatrix [0 -im*D 0; im*D 0 0; 0 0 -one(D)])
 
 function susceptibility_T(::DriftKinetic, ω, k::Wavevector)
     b = kperp(k)^2
@@ -269,7 +268,7 @@ function _tensor(m, k::Wavevector)
 end
 
 susceptibility_T(r::GordeyevSeries, ω, k::Wavevector) = _tensor_series(ω, k, _harmonics(r, kperp(k)^2), Val(true))
-susceptibility(r::GordeyevSeries, ω, k::Wavevector) = first(_tensor_series(ω, k, _harmonics(r, kperp(k)^2), Val(false)))
+_susceptibility(r::GordeyevSeries, ω, k::Wavevector) = first(_tensor_series(ω, k, _harmonics(r, kperp(k)^2), Val(false)))
 
 # Gyrokinetic limit of the hot tensor: the p = 0 term exactly; p ≠ 0 to lowest order in ω (ω ≪ Ω, k∥v_t ≪ Ω):
 # M_xx += ω² (1 - Γ₀)/b, M_yy += ω² Σ_{p≠0} (Γ_p/b - 2b Γ_p'/p²), M_xy += -iω Γ₀' (polarisation, E×B with FLR).
@@ -338,7 +337,7 @@ function _orbit_integral(r::GordeyevIntegral, ω, k::Wavevector, ::Val{withT}) w
     end
     return im * ω * acc
 end
-susceptibility(r::GordeyevIntegral, ω, k::Wavevector) = _orbit_integral(r, ω, k, Val(false))
+_susceptibility(r::GordeyevIntegral, ω, k::Wavevector) = _orbit_integral(r, ω, k, Val(false))
 function susceptibility_T(r::GordeyevIntegral, ω, k::Wavevector)
     acc = _orbit_integral(r, ω, k, Val(true))
     return acc[:, SVector(1, 2, 3)], acc[:, SVector(4, 5, 6)]

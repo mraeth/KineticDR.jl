@@ -229,8 +229,10 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
   - `gordeyev(r, ω, k) -> (S, S_T)` for the electrostatic path: the Gordeyev sum and its temperature
     derivative, in the species' own units (ω in |Ω_s|, k in 1/ρ_s);
   - `susceptibility_T(r, ω, k) -> (M, T∂_T M)` for the electromagnetic path: the 3×3 tensor M in the frame where
-    k⊥ ∥ x̂ and its temperature derivative (the drive of a temperature gradient). A response without a
-    temperature defines `susceptibility(r, ω, k)` and `susceptibility(r, ω, k, ωn, ωT)` instead.
+    k⊥ ∥ x̂ and its temperature derivative (the drive of a temperature gradient). Mind the convention: the
+    ω_*T weight is M + T∂_T M here, but S_T itself in the electrostatic drive −(ω − ωn)S + ωT S_T. A response
+    without a temperature (`Cold`) defines only `KineticDR._susceptibility(r, ω, k)`, M without polarisation;
+    its `Species` has no ω_*.
   The `Species` methods add the gradient drive, the units, the electron sign, the rotation to (kx, ky) and the
   gradient charge; override `KineticDR.charge_vector(::Species{R}, ω, k)` if j_x is not the E×B current.
   A fluid response without a Gordeyev sum (`Cold`) defines `charge_response(::Species{R}, ω, k)` instead of

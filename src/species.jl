@@ -39,10 +39,14 @@ Gordeyev sum in the species' own units (frequencies in |Ω_s|, lengths in ρ_ts)
 """
 function nonadiabatic_response(s::Species, ω, k::Wavevector)
     Ω, ks = _species_units(s, k)
-    ωn = (s.T / s.q) * k.ky * s.κn / Ω                           # ω_*s / |Ω_s|
-    ωT = (s.T / s.q) * k.ky * s.κT / Ω                           # ω_*Ts / |Ω_s|
-    return nonadiabatic_response(s.response, ω / Ω, ks, ωn, ωT)
+    return nonadiabatic_response(s.response, ω / Ω, ks, _drive(s, k, Ω)...)
 end
+
+# Gradient drive in the species' own units: ωn = ω_*s/|Ω_s|, ωT = ω_*Ts/|Ω_s|. A species without a temperature
+# (`Cold`) has none; its density gradient enters through the charge, and κT must be 0.
+_drive(s::Species, k::Wavevector, Ω) = ((s.T / s.q) * k.ky * s.κn / Ω, (s.T / s.q) * k.ky * s.κT / Ω)
+_drive(s::Species{Cold}, k::Wavevector, Ω) = (_check_cold(s); (0.0, 0.0))
+_check_cold(s) = s.κT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0 (got $(s.κT))"))
 
 # |Ω_s| and k in the species' own units: k⊥ρ_ts, k∥ v_ts/|Ω_s|.
 function _species_units(s::Species, k::Wavevector)
@@ -64,9 +68,7 @@ charge, -i k·χ̃ E + g·E = ρ (the electrostatic `charge_response`).
 """
 function susceptibility(s::Species, ω, k::Wavevector)
     Ω, ks = _species_units(s, k)
-    ωn = (s.T / s.q) * k.ky * s.κn / Ω
-    ωT = (s.T / s.q) * k.ky * s.κT / Ω
-    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz), ωn, ωT)
+    M = susceptibility(s.response, ω / Ω, Wavevector(kperp(ks), 0.0, ks.kz), _drive(s, k, Ω)...)
     fy = s.q < 0 ? -1 : 1                                         # mirror y -> -y
     F = SVector(1, fy, 1)
     kp = kperp(k)
@@ -98,7 +100,7 @@ A response without a Gordeyev sum overrides this method for `Species{R}` (lab un
 charge_response(s::Species, ω, k::Wavevector) =
     s.q^2 * s.N / s.T * (nonadiabatic_response(s, ω, k) - 1) - polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
 function charge_response(s::Species{Cold}, ω, k::Wavevector)
-    s.κT == 0 || throw(ArgumentError("Cold species have no temperature: κT must be 0 (got $(s.κT))"))
+    _check_cold(s)
     return -polarization_weight(s, ω) * s.N * s.m * kperp(k)^2 - s.q * s.N * s.κn * k.ky / ω + s.q^2 * s.N / s.m * k.kz^2 / ω^2
 end
 

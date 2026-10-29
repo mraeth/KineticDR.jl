@@ -679,14 +679,17 @@ end
 
 @testset "electromagnetic: gradients" begin
     # the longitudinal row is the full charge: -k·χ̃·k = charge_response, every response, both signs, with gradients
-    ω, k = 0.6 + 0.08im, Wavevector(0.3, 0.7, 0.2)
-    kv = [k.kx, k.ky, k.kz]
-    for r in (GordeyevSeries(), GordeyevIntegral(), Gyrokinetic(), DriftKinetic(), DriftKinetic(polarization = true), Cold(), Boltzmann()),
+    ω = 0.6 + 0.08im
+    for k in (Wavevector(0.3, 0.7, 0.2), Wavevector(-0.4, -0.2, -0.3), Wavevector(0.0, 0.5, -0.1)),
+        r in (GordeyevSeries(), GordeyevIntegral(), Gyrokinetic(), DriftKinetic(), DriftKinetic(polarization = true), Cold(), Boltzmann()),
         q in (1, -1)
+        kv = [k.kx, k.ky, k.kz]
         s = Species(; q, m = q > 0 ? 1.0 : 0.05, T = 0.8, N = 0.9, κn = 0.3, κT = r isa Cold ? 0.0 : -0.4, response = r)
         @test -(transpose(kv) * susceptibility(s, ω, k) * kv) ≈ charge_response(s, ω, k) rtol = 1e-13
     end
+    k = Wavevector(0.3, 0.7, 0.2)
     @test_throws ArgumentError susceptibility(Species(κT = 0.1, response = Cold()), ω, k)
+    @test_throws ArgumentError susceptibility(Species(κT = 0.1, response = Cold()), ω, Wavevector(0.3, 0.0, 0.2))   # k_y = 0 too
     # T∂_T M = ½ d/ds M(ω, s k) (central difference, h² ~ 1e-8)
     kf = Wavevector(0.9, 0.0, 0.3)
     for r in (GordeyevSeries(), GordeyevIntegral(), Gyrokinetic(), DriftKinetic())
