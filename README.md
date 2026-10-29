@@ -45,7 +45,7 @@ dispersion(model, 1.05 + 0.01im, k)                    # D(ω); the modes are it
 ```
 
 - `Species(; q, m, T, N, κn, κT, response)` gives charge, mass, temperature, density and gradients in
-  the units above, plus the kinetic response. Electrons are `q = -1, m = 1/1836` (or a reduced mass).
+  the units above, plus the response. Electrons are `q = -1, m = 1/1836` (or a reduced mass).
 - `Model(species, field)` takes any number of species.
 - `dispersion(model, ω, k)` is a scalar, analytic in ω. Every solver below only needs this function.
 
@@ -225,7 +225,9 @@ A root counts as converged when the Newton step |D/D′| is below `ftol` (defaul
   - `susceptibility(r, ω, k)` for the electromagnetic path: the 3×3 tensor M in the frame where k⊥ ∥ x̂.
   The `Species` methods add the gradient drive, the units, the electron sign and the rotation to (kx, ky).
   A fluid response without a Gordeyev sum (`Cold`) defines `charge_response(::Species{R}, ω, k)` instead of
-  `gordeyev`.
+  `gordeyev`: at the `Species` level, in lab units, with its own gradient drive. A polarisation outside the
+  kinetic response comes from `polarization_weight(r, ω)` (species units), which sets both the charge
+  −w N m k⊥² and M_xx = M_yy = ω² w, so the electrostatic and electromagnetic paths stay consistent.
 - A new electrostatic **field equation** is a subtype of `AbstractFieldEquation` with
   `residual(field, ρs, k)`, where ρs is the tuple of the species' q_s δn_s/φ.
 

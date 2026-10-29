@@ -77,6 +77,7 @@ end
 
 Charge response in units e N_i/T_i: (q² N/T)(W − 1) − w N m k⊥², with w the `polarization_weight` (0 for the
 kinetic responses, whose W holds the polarisation; 0 or 1 for `DriftKinetic`). `Cold` is the fluid response.
+A response without a Gordeyev sum overrides this method for `Species{R}` (lab units, its own gradient drive).
 """
 charge_response(s::Species, ω, k::Wavevector) =
     s.q^2 * s.N / s.T * (nonadiabatic_response(s, ω, k) - 1) - polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
@@ -85,11 +86,8 @@ function charge_response(s::Species{Cold}, ω, k::Wavevector)
     return -polarization_weight(s, ω) * s.N * s.m * kperp(k)^2 - s.q * s.N * s.κn * k.ky / ω + s.q^2 * s.N / s.m * k.kz^2 / ω^2
 end
 
-# Weight w of the Boussinesq polarisation charge -w N m k⊥² (B = 1) outside W: 0 for kinetic responses, 1 or 0
-# (`DriftKinetic`), Ω²/(Ω² - ω²) for a cold fluid.
-polarization_weight(s::Species, ω) = 0.0
-polarization_weight(s::Species{DriftKinetic}, ω) = s.response.polarization ? 1.0 : 0.0
-polarization_weight(s::Species{Cold}, ω) = (Ω2 = cyclotron_frequency(s)^2; Ω2 / (Ω2 - ω^2))
+# Polarisation weight w of `s` at lab frequency ω (see `polarization_weight(r, ω)` in responses.jl).
+polarization_weight(s::Species, ω) = polarization_weight(s.response, ω / abs(cyclotron_frequency(s)))
 
 """
     Model(species, field)

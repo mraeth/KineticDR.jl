@@ -4,21 +4,28 @@
 # its T-derivative. The nonadiabatic density response to φ follows for any Maxwellian background:
 #     ∫h d³v / φ = -ω S + ωT S_T + ωn S                       (PRL 133, 195101, Eq. 9)
 # so a kinetic response model only has to supply (S, S_T). A fluid response (`Cold`) has no Gordeyev sum and
-# defines `charge_response(::Species{R}, ω, k)` instead; a polarisation charge -w N m k⊥² outside W comes from
-# `polarization_weight` (`DriftKinetic`).
+# defines `charge_response(::Species{R}, ω, k)` instead, at the Species level and in lab units (it adds its own
+# gradient drive). A polarisation outside W, -w N m k⊥² electrostatically and ω² w in M_xx = M_yy, has one origin
+# for both paths: `polarization_weight(r, ω)` in the species' units (0 for the kinetic responses).
 
 """
     GordeyevSeries(; pmax = nothing, tol = 1e-15)
 
 Full-orbit response: sum over all cyclotron harmonics p. `pmax = nothing` truncates adaptively
-when Γ_p < tol; an integer truncates at ±pmax (pmax = 0 is the gyrokinetic limit).
+when Γ_p < tol; an integer truncates at ±pmax (pmax = 0 is the electrostatic gyrokinetic limit; electromagnetically
+the p ≠ 0 polarisation and E×B currents are missing, use `Gyrokinetic()`).
 """
 Base.@kwdef struct GordeyevSeries <: AbstractResponse
     pmax::Union{Nothing,Int} = nothing
     tol::Float64 = 1e-15
 end
 
-"Gyrokinetic response: only the p = 0 term (the J₀² response of slab ITG/ETG)."
+"""
+    Gyrokinetic()
+
+Gyrokinetic response. Electrostatic: only the p = 0 term (the J₀² response of slab ITG/ETG). Electromagnetic:
+the p = 0 term of the hot tensor plus the polarisation and E×B currents of p ≠ 0 to lowest order in ω/Ω.
+"""
 struct Gyrokinetic <: AbstractResponse end
 
 """
@@ -55,6 +62,13 @@ of ω_pi²/Ω_i²; electrostatic, the charge response -N m k⊥²).
 Base.@kwdef struct DriftKinetic <: AbstractResponse
     polarization::Bool = false
 end
+
+# Weight w of the Boussinesq polarisation outside W, in the species' units (ω in |Ω_s|), the one origin of the
+# charge -w N m k⊥² (B = 1) and of M_xx = M_yy = ω² w: 0 for the kinetic responses, 1 or 0 (`DriftKinetic`),
+# 1/(1 - ω²) for a cold fluid.
+polarization_weight(r::AbstractResponse, ω) = 0.0
+polarization_weight(r::DriftKinetic, ω) = r.polarization ? 1.0 : 0.0
+polarization_weight(r::Cold, ω) = 1 / (1 - ω^2)
 
 function _series(ω, k::Wavevector, ps)
     x = kperp(k)^2
@@ -150,14 +164,13 @@ end
 
 susceptibility(r::AbstractResponse, ω, k::Wavevector) =
     throw(ArgumentError("$(nameof(typeof(r))) has no electromagnetic susceptibility"))
-function susceptibility(::Cold, ω, k::Wavevector)
-    d = ω^2 - 1
-    S, D = -ω^2 / d, ω / d
+function susceptibility(r::Cold, ω, k::Wavevector)
+    S, D = ω^2 * polarization_weight(r, ω), ω / (ω^2 - 1)
     return @SMatrix [S -im*D 0; im*D S 0; 0 0 -one(S)]
 end
 
 function susceptibility(r::DriftKinetic, ω, k::Wavevector)
-    S = r.polarization ? ω^2 : zero(ω^2)
+    S = ω^2 * polarization_weight(r, ω)
     b = kperp(k)^2
     κ = abs(k.kz)
     if κ == 0
