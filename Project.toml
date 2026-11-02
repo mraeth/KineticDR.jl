@@ -1,6 +1,6 @@
 name = "KineticDR"
 uuid = "945d438b-d22f-4fc6-81fd-d332b52ce193"
-authors = ["Mario Raeth"]
+authors = ["Mario Raeth <mario.raeth@ipp.mpg.de>"]
 version = "0.1.0"
 
 [deps]
