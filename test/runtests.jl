@@ -859,3 +859,38 @@ end
     @test abs(rN[3].ω - rN[2].ω) < 1e-6 * abs(rN[3].ω)
     @test abs(rN[3].ω - rN[2].ω) < 1e-3 * abs(rN[2].ω - rN[1].ω)
 end
+
+@testset "DriftKinetic: T⊥ = 0 (mirror = false) and polarisation density" begin
+    μ, β = 0.01, 0.5
+    k = Wavevector(0.4, 0.3, 0.2)
+    el(; kw...) = Species(q = -1, m = μ, T = 0.3, response = DriftKinetic(; kw...))
+    # T⊥ = 0: no δB∥ coupling (species frame), the rest unchanged; identical without k⊥
+    M0, M1 = KD.susceptibility_T(DriftKinetic(mirror = false), 0.3 + 0.02im, k), KD.susceptibility_T(DriftKinetic(), 0.3 + 0.02im, k)
+    @test M0[1][2, 2] == 0 && M0[1][2, 3] == 0 && M0[1][3, 2] == 0 && all(iszero, M0[2][2, :])
+    @test M0[1][3, 3] == M1[1][3, 3] && M0[1][1, 2] == M1[1][1, 2]
+    kz = Wavevector(0.0, 0.0, 0.2)
+    @test susceptibility(el(mirror = false), 0.3 + 0.02im, kz) == susceptibility(el(), 0.3 + 0.02im, kz)
+    @test charge_response(el(mirror = false), 0.3 + 0.02im, k) == charge_response(el(), 0.3 + 0.02im, k)
+    # polarisation weight and form: w = 0 is no polarisation; both forms carry the same charge (k̂ᵀχk̂)
+    @test susceptibility(el(polarization = 0.0, polarization_form = :density), 0.3, k) == susceptibility(el(), 0.3, k)
+    kv = [k.kx, k.ky, k.kz] / sqrt(k.kx^2 + k.ky^2 + k.kz^2)
+    χc, χd = susceptibility(el(polarization = 0.7), 0.3, k), susceptibility(el(polarization = 0.7, polarization_form = :density), 0.3, k)
+    @test kv' * χc * kv ≈ kv' * χd * kv rtol = 1e-14
+    @test DriftKinetic(polarization = true).polarization == 1.0
+    @test_throws ArgumentError DriftKinetic(polarization_form = :charge)
+    # Closed form: cold ions, cold T⊥ = 0 drift electrons with polarisation density w (the identity form of the bslLD
+    # charge-form solver): σ = (-iω - R)⁻¹ - R + i/(ωμ) ẑẑ - iω w μ k k⊥ᵀ/k², D = (2/β) i K K/ω - σ = iω 𝒟
+    for (kp, kz, w) in ((2.0, 0.5, 1.0), (1.0, 1.0, 0.3), (2.0, 0.0, 1.0))
+        κ = [kp, 0.0, kz]
+        K = [0 -κ[3] κ[2]; κ[3] 0 -κ[1]; -κ[2] κ[1] 0]
+        R = ComplexF64[0 1 0; -1 0 0; 0 0 0]
+        m = Model((Species(response = Cold()),
+                   Species(q = -1, m = μ, T = 1e-12, response = DriftKinetic(polarization = w, polarization_form = :density, mirror = false))),
+                  Darwin(beta = β))
+        for ω in (0.37 + 0.0im, 1.7 + 0.1im)
+            σ = inv(-im * ω * Diagonal(ones(3)) - R) - R + Diagonal([0, 0, im / (ω * μ)]) - im * ω * w * μ * κ * [kp, 0.0, 0.0]' / sum(abs2, κ)
+            D = (2 / β) * im * K * K / ω - σ
+            @test dispersion_matrix(m, ω, Wavevector(kp, 0.0, kz)) ≈ D / (im * ω) rtol = 1e-8   # thermal O(k∥²v_t²/ω²)
+        end
+    end
+end

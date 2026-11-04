@@ -59,7 +59,7 @@ Which response works with which model:
 | `Gyrokinetic()` | J₀², no harmonics (slab ITG/ETG); EM: p = 0 exactly, polarisation and E×B to lowest order in ω/Ω | ✓ | ✓ | ✓ |
 | `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
 | `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | ✓ |
-| `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
+| `DriftKinetic(; polarization = false, polarization_form = :current, mirror = true)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor. `polarization = w` (real weight; `true` = 1); `polarization_form = :density` keeps only the polarisation density (longitudinal current w N m k k⊥ᵀ/k², the identity form of hybrid solvers); `mirror = false` is T⊥ = 0 (no μ∇∥B force, no perpendicular pressure: M_yy = M_yz = 0) | ✓ | ✓ | ✓ |
 
 Field equations: `Quasineutrality()` and `Poisson(lambda2 = (λ_D/ρ_i)²)` are electrostatic, local and
 radial. `Darwin(beta)` and `Maxwell(beta, lambda2)` are electromagnetic and local only. A combination
