@@ -49,25 +49,36 @@ q δn/φ = -w N m k⊥² - q N κn k_y/ω + (q² N/m) k_z²/ω², w = Ω²/(Ω²
 struct Cold <: AbstractResponse end
 
 """
-    DriftKinetic(; polarization = false)
+    DriftKinetic(; polarization = false, polarization_form = :current, mirror = true)
 
 Drift-kinetic species, no finite Larmor radius. Electromagnetic: the m → 0 limit of the hot tensor at
 fixed ζ = ω/(√2 |k∥| v_t) (electrons): E×B Hall current, parallel Landau response -ζ² Z'(ζ), and the
 n = 0 coupling to δB∥ (μ∇∥B force and perpendicular pressure): M_yy = 2b ζ Z(ζ),
 M_yz = -M_zy = -i √(b/2) ζ Z'(ζ), b = (k⊥ρ_t)², which stay finite in χ as m → 0.
 Electrostatic: the p = 0 term at k⊥ρ = 0 (Γ₀ = 1, any gradients).
-`polarization = true` adds the polarisation drift (M_xx = M_yy += ω², i.e. χ_xx = N m/q² in units
-of ω_pi²/Ω_i²; electrostatic, the charge response -N m k⊥²).
+`polarization = w` (`true` = 1) adds the polarisation drift with weight w: electrostatic, the charge response
+-w N m k⊥²; electromagnetic, `polarization_form = :current` (M_xx = M_yy += w ω², i.e. χ_xx = w N m/q² in units
+of ω_pi²/Ω_i²) or `:density`, only the polarisation density, carried by the longitudinal current
+χ = w N m k k⊥ᵀ/k² (the identity form of a hybrid solver that keeps the polarisation in quasineutrality).
+`mirror = false`: T⊥ = 0, no μ∇∥B force and no perpendicular pressure, M_yy = M_yz = 0 (the guiding-centre
+streaming acts on f, not on B∥* f, so δB∥ does not couple to the parallel motion).
 """
-Base.@kwdef struct DriftKinetic <: AbstractResponse
-    polarization::Bool = false
+struct DriftKinetic <: AbstractResponse
+    polarization::Float64
+    polarization_form::Symbol
+    mirror::Bool
+    function DriftKinetic(; polarization::Real = false, polarization_form::Symbol = :current, mirror::Bool = true)
+        polarization_form in (:current, :density) ||
+            throw(ArgumentError("polarization_form must be :current or :density, got :$polarization_form"))
+        return new(Float64(polarization), polarization_form, mirror)
+    end
 end
 
 # Weight w of the Boussinesq polarisation outside W, in the species' units (ω in |Ω_s|), the one origin of the
 # charge -w N m k⊥² (B = 1) and of M_xx = M_yy = ω² w: 0 for the kinetic responses, 1 or 0 (`DriftKinetic`),
 # 1/(1 - ω²) for a cold fluid.
 polarization_weight(r::AbstractResponse, ω) = 0.0
-polarization_weight(r::DriftKinetic, ω) = r.polarization ? 1.0 : 0.0
+polarization_weight(r::DriftKinetic, ω) = r.polarization
 polarization_weight(r::Cold, ω) = 1 / (1 - ω^2)
 
 function _series(ω, k::Wavevector, ps)
@@ -167,7 +178,7 @@ end
 #   M(ω, k; ωn, ωT) = (1 - ωn/ω) M - (ωT/ω)(M + T∂_T M) + polarisation   (species units, ωn = ω_*/|Ω|),
 # with T∂_T M = ½ d/ds M(ω, s k) at s = 1 (k⊥ρ_t and k∥v_t scale with √T). Every M passes through
 # `_susceptibility(r, ω, k)` (M without polarisation; `first(susceptibility_T)` unless a response has a cheaper M-only
-# path) and gets `_polarization(r, ω)` added once. A response without a temperature (`Cold`) defines only
+# path) and gets `_polarization(r, ω, k)` added once. A response without a temperature (`Cold`) defines only
 # `_susceptibility`: its Species has no ω_* (`_drive`), its density gradient enters through `charge_vector`.
 # Conventions differ from the electrostatic hook: there the ω_*T weight is S_T itself (W = -(ω - ωn)S + ωT S_T),
 # here it is M + T∂_T M.
@@ -179,11 +190,11 @@ Susceptibility tensor of response `r` in its own units, with the gradient drive 
 (1 - ωn/ω) M - (ωT/ω)(M + T∂_T M) from `susceptibility_T`, plus a polarisation drift that the drive does not weight
 (`DriftKinetic(polarization = true)`).
 """
-susceptibility(r::AbstractResponse, ω, k::Wavevector) = _susceptibility(r, ω, k) + _polarization(r, ω)
+susceptibility(r::AbstractResponse, ω, k::Wavevector) = _susceptibility(r, ω, k) + _polarization(r, ω, k)
 function susceptibility(r::AbstractResponse, ω, k::Wavevector, ωn, ωT)
     ωn == 0 && ωT == 0 && return susceptibility(r, ω, k)
     M, MT = susceptibility_T(r, ω, k)
-    return (1 - ωn / ω) * M - (ωT / ω) * (M + MT) + _polarization(r, ω)
+    return (1 - ωn / ω) * M - (ωT / ω) * (M + MT) + _polarization(r, ω, k)
 end
 
 """
@@ -198,13 +209,22 @@ susceptibility_T(r::AbstractResponse, ω, k::Wavevector) =
 _susceptibility(r::AbstractResponse, ω, k::Wavevector) = first(susceptibility_T(r, ω, k))
 # Polarisation drift, Boussinesq: M_xx = M_yy = ω² w (`polarization_weight`), not weighted by the gradient drive,
 # as the electrostatic -w N m k⊥².
-_polarization(r::AbstractResponse, ω) = (S = ω^2 * polarization_weight(r, ω); @SMatrix [S 0 0; 0 S 0; 0 0 0])
+_polarization(r::AbstractResponse, ω, k::Wavevector) = (S = ω^2 * polarization_weight(r, ω); @SMatrix [S 0 0; 0 S 0; 0 0 0])
+# Density form (frame k⊥ ∥ x̂): the longitudinal current w ω² k k⊥ᵀ/k² with the charge -w N m k⊥² of the current form.
+function _polarization(r::DriftKinetic, ω, k::Wavevector)
+    S = ω^2 * polarization_weight(r, ω)
+    r.polarization_form === :current && return @SMatrix [S 0 0; 0 S 0; 0 0 0]
+    kp, kz = kperp(k), k.kz
+    k2 = kp^2 + kz^2
+    iszero(k2) && return zero(SMatrix{3,3,typeof(S)})
+    return S / k2 * @SMatrix [kp^2 0 0; 0 0 0; kz*kp 0 0]
+end
 
 # Cold: T = 0, no ω_* (no `susceptibility_T`); the density gradient enters through the charge (`charge_vector`)
 _susceptibility(::Cold, ω, k::Wavevector) = (D = ω / (ω^2 - 1); @SMatrix [0 -im*D 0; im*D 0 0; 0 0 -one(D)])
 
-function susceptibility_T(::DriftKinetic, ω, k::Wavevector)
-    b = kperp(k)^2
+function susceptibility_T(r::DriftKinetic, ω, k::Wavevector)
+    b = r.mirror ? kperp(k)^2 : zero(kperp(k))              # T⊥ = 0: no δB∥ coupling
     κ = abs(k.kz)
     c = zero(complex(ω))
     if κ == 0
