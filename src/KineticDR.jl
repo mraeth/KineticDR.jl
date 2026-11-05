@@ -26,7 +26,8 @@ include("solve.jl")
 include("radial.jl")
 
 export Wavevector, kperp
-export AbstractResponse, GordeyevSeries, GordeyevIntegral, Gyrokinetic, Boltzmann, Cold, DriftKinetic, BGK, Resistive
+export AbstractResponse, GordeyevSeries, GordeyevIntegral, Gyrokinetic, Boltzmann, Cold, DriftKinetic, BGK, Resistive,
+       ResistiveThermal
 export gordeyev, susceptibility, susceptibility_T
 export Species, Model, nonadiabatic_response, charge_response, with_gradients
 export cyclotron_frequency, thermal_speed, thermal_gyroradius

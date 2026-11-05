@@ -70,3 +70,37 @@ function charge_response(s::Species{Resistive}, ω, k::Wavevector)
     return (-s.q * s.N * s.κn * k.ky - im * α * s.q^2 * s.N / s.T) / (ω + im * α) -
            polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
 end
+
+"""
+    ResistiveThermal(; α, polarization = false)
+
+`Resistive` with a dynamic electron temperature (collisional Braginskii closure, Z = 1, massless electrons, k⊥ρ = 0):
+density and temperature are advected by E×B on the background gradients (κn, κT), and the parallel flux and heat
+flux relax them along B. With ñ = δn/N, T̃ = δT/T, φ̃ = -qφ/T and the drift frequencies ω_* = (T/q) k_y κn,
+ω_*T = (T/q) k_y κT (lab units):
+
+    -iω ñ        = -iω_* φ̃        - α (ñ + 1.71 T̃ - φ̃)
+    -iω (3/2) T̃ = -iω_*T (3/2) φ̃ - 1.71 α (ñ + 1.71 T̃ - φ̃) - 3.16 α T̃
+
+(parallel flux ∝ ∇∥(φ̃ - ñ - 1.71 T̃) with the thermal force 0.71, heat flux 0.71 T Γ∥ - 3.16 (NT/mν) ∇∥T, its
+compression), and q δn/φ = -(q² N/T) ñ/φ̃. α → 0 is the E×B response (`DriftKinetic()` at k∥ = 0), α → ∞ the
+isothermal Boltzmann response. α = k∥² v_t²/ν_c in units of Ω_i. Electrostatic only.
+"""
+struct ResistiveThermal <: AbstractResponse
+    α::Float64
+    polarization::Bool
+end
+ResistiveThermal(; α, polarization = false) = ResistiveThermal(float(α), polarization)
+polarization_weight(r::ResistiveThermal, ω) = r.polarization ? 1.0 : 0.0
+
+gordeyev(r::ResistiveThermal, ω, k::Wavevector) =
+    throw(ArgumentError("ResistiveThermal is a fluid response; use charge_response(::Species{ResistiveThermal}, ω, k)"))
+
+function charge_response(s::Species{ResistiveThermal}, ω, k::Wavevector)
+    α = s.response.α
+    ωn, ωT = (s.T / s.q) * k.ky * s.κn, (s.T / s.q) * k.ky * s.κT
+    A = @SMatrix [(-im * ω + α) 1.71α; 1.71α (-1.5im * ω + (1.71^2 + 3.16) * α)]
+    b = SVector(-im * ωn + α, -1.5im * ωT + 1.71α)
+    ñ = (A \ b)[1]
+    return -s.q^2 * s.N / s.T * ñ - polarization_weight(s, ω) * s.N * s.m * kperp(k)^2
+end

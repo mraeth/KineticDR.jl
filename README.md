@@ -62,6 +62,7 @@ Which response works with which model:
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
 | `BGK(inner = GordeyevSeries(); ν)` | `inner` with a number-conserving BGK collision operator −ν(f − (n/N)F₀) (charge exchange) | ✓ | – | – |
 | `Resistive(; α, polarization = false)` | isothermal massless fluid at k∥ = 0 with resistive coupling α to Boltzmann (Hasegawa–Wakatani electrons) | ✓ | – | – |
+| `ResistiveThermal(; α, polarization = false)` | `Resistive` with dynamic T_e: Braginskii thermal force 0.71 and parallel conduction 3.16 (Z = 1), drive κn and κT | ✓ | – | – |
 
 Field equations: `Quasineutrality()` and `Poisson(lambda2 = (λ_D/ρ_i)²)` are electrostatic, local and
 radial. `Darwin(beta)` and `Maxwell(beta, lambda2)` are electromagnetic and local only. A combination
@@ -106,6 +107,7 @@ with_gradients(model; κn = 0.1, κT = 0.5)              # the same model with o
 the number-restoring source, q δn/φ = (q²N/T)(W(ω̃) − 1)/(1 + iν S(ω̃)). `Resistive(; α)` is the electron closure
 q δn/φ = (ω ρ_E×B + iα ρ_B)/(ω + iα) between the k∥ = 0 E×B response (α → 0) and Boltzmann (α → ∞), with
 α = k∥²v_te²/ν_ei a fixed number; `polarization = true` adds −N m k⊥², which the drift-cyclotron coupling needs.
+`ResistiveThermal(; α)` adds the electron temperature perturbation (Braginskii, Z = 1), so a T_e gradient drives too.
 
 ```julia
 ion = Species(κn = -0.35, response = BGK(ν = 0.1))
@@ -283,7 +285,7 @@ src/special.jl     plasma Z function, Γ_p = I_p e^{-x}
 src/types.jl       Wavevector, abstract types
 src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral, Cold, DriftKinetic
 src/species.jl     Species, Model, charge_response, susceptibility, with_gradients
-src/collisional.jl BGK (ion–neutral collisions), Resistive (resistive electrons); electrostatic, local
+src/collisional.jl BGK (ion–neutral collisions), Resistive, ResistiveThermal (resistive electrons); electrostatic, local
 src/fields.jl      Quasineutrality, Poisson, Darwin, Maxwell, dispersion, dispersion_matrix
 src/solve.jl       root finders and gradient scans
 src/radial.jl      profile species, radial grid and operator, eigenmode solvers

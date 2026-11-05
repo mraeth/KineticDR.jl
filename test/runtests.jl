@@ -897,4 +897,22 @@ end
           charge_response(ele(DriftKinetic(polarization = true)), ω, k) rtol = 1e-13
     @test_throws ArgumentError nonadiabatic_response(ele(Resistive(α = 1)), ω, k)
     @test_throws ArgumentError nonadiabatic_response(ion(BGK(ν = 1)), ω, k)
+
+    # resistive electrons with temperature: E×B for α → 0 (κT does not enter the density at k⊥ρ = 0), isothermal
+    # Boltzmann for α → ∞, and the 2×2 balance solved by elimination
+    eth(r; κT = -0.15) = Species(q = -1, T = 10.0, m = 1 / 1836, κn = -0.3, κT = κT, response = r)
+    @test charge_response(eth(ResistiveThermal(α = 0)), ω, k) ≈ ρE rtol = 1e-13
+    @test charge_response(eth(ResistiveThermal(α = 1e10)), ω, k) ≈ ρB rtol = 1e-8
+    @test charge_response(eth(ResistiveThermal(α = 0, polarization = true)), ω, k) ≈
+          charge_response(ele(DriftKinetic(polarization = true)), ω, k) rtol = 1e-13
+    let α = 0.7, s = eth(ResistiveThermal(α = 0.7))
+        ωn, ωT = (s.T / s.q) * k.ky * s.κn, (s.T / s.q) * k.ky * s.κT
+        # T̃ from the energy equation, substituted into continuity
+        c = -1.5im * ω + (1.71^2 + 3.16) * α
+        ñ = ((-im * ωn + α) - 1.71α * (-1.5im * ωT + 1.71α) / c) / ((-im * ω + α) - (1.71α)^2 / c)
+        @test charge_response(s, ω, k) ≈ -s.q^2 * s.N / s.T * ñ rtol = 1e-12
+    end
+    # the thermal response is not the isothermal one at finite α, even without κT
+    @test !isapprox(charge_response(eth(ResistiveThermal(α = 0.7); κT = 0.0), ω, k),
+                    charge_response(eth(Resistive(α = 0.7); κT = 0.0), ω, k); rtol = 1e-3)
 end
