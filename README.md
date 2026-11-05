@@ -60,6 +60,8 @@ Which response works with which model:
 | `Boltzmann()` | adiabatic, δn = −qNφ/T; EM: the ζ → 0 limit of `DriftKinetic`, δn = −qNψ/T (E∥ = −ik∥ψ) | ✓ | ✓ (k∥ ≠ 0) | ✓ |
 | `Cold()` | cold fluid (Stix S, D, P); E×B density-gradient drive, no κT | ✓ | ✓ | ✓ |
 | `DriftKinetic(; polarization = false)` | no Larmor radius: p = 0 at Γ₀ = 1; EM the m → 0 limit of the hot tensor | ✓ | ✓ | ✓ |
+| `BGK(inner = GordeyevSeries(); ν)` | `inner` with a number-conserving BGK collision operator −ν(f − (n/N)F₀) (charge exchange) | ✓ | – | – |
+| `Resistive(; α, polarization = false)` | isothermal massless fluid at k∥ = 0 with resistive coupling α to Boltzmann (Hasegawa–Wakatani electrons) | ✓ | – | – |
 
 Field equations: `Quasineutrality()` and `Poisson(lambda2 = (λ_D/ρ_i)²)` are electrostatic, local and
 radial. `Darwin(beta)` and `Maxwell(beta, lambda2)` are electromagnetic and local only. A combination
@@ -96,6 +98,19 @@ Stability boundaries. D is affine in the gradients of each species, and these ac
 critical_kappaT(model, k, 0.23, 1)                     # smallest κT for an unstable p = 1 root at κn = 0.23
 neutral_gradients(model, 1.05, k)                      # (κn, κT) that put a root exactly at ω = 1.05
 with_gradients(model; κn = 0.1, κT = 0.5)              # the same model with other gradients
+```
+
+### Collisional responses
+
+`BGK(inner; ν)` adds ion–neutral collisions (ν in Ω_i) to a kinetic response: the orbit integral at ω̃ = ω + iν and
+the number-restoring source, q δn/φ = (q²N/T)(W(ω̃) − 1)/(1 + iν S(ω̃)). `Resistive(; α)` is the electron closure
+q δn/φ = (ω ρ_E×B + iα ρ_B)/(ω + iα) between the k∥ = 0 E×B response (α → 0) and Boltzmann (α → ∞), with
+α = k∥²v_te²/ν_ei a fixed number; `polarization = true` adds −N m k⊥², which the drift-cyclotron coupling needs.
+
+```julia
+ion = Species(κn = -0.35, response = BGK(ν = 0.1))
+ele = Species(q = -1, m = 1 / 73350, T = 12.9, κn = -0.35, response = Resistive(α = 10, polarization = true))
+find_modes(Model((ion, ele), Quasineutrality()), Wavevector(ky = 3.0); re = 0.1:0.2:10, imag = (0.005, 0.05))
 ```
 
 ## Local electromagnetic modes
@@ -268,6 +283,7 @@ src/special.jl     plasma Z function, Γ_p = I_p e^{-x}
 src/types.jl       Wavevector, abstract types
 src/responses.jl   GordeyevSeries, Gyrokinetic, Boltzmann, GordeyevIntegral, Cold, DriftKinetic
 src/species.jl     Species, Model, charge_response, susceptibility, with_gradients
+src/collisional.jl BGK (ion–neutral collisions), Resistive (resistive electrons); electrostatic, local
 src/fields.jl      Quasineutrality, Poisson, Darwin, Maxwell, dispersion, dispersion_matrix
 src/solve.jl       root finders and gradient scans
 src/radial.jl      profile species, radial grid and operator, eigenmode solvers

@@ -859,3 +859,42 @@ end
     @test abs(rN[3].ω - rN[2].ω) < 1e-6 * abs(rN[3].ω)
     @test abs(rN[3].ω - rN[2].ω) < 1e-3 * abs(rN[2].ω - rN[1].ω)
 end
+
+@testset "collisional: BGK ions and resistive electrons" begin
+    ion(r; κn = -0.3, κT = 0.0) = Species(; κn, κT, response = r)
+    for k in (Wavevector(ky = 2.0), Wavevector(ky = 2.0, kz = 0.05)), ω in (3.2 + 0.05im, 0.7 + 0.1im)
+        # ν = 0 is the collisionless response, with all gradient drives
+        @test charge_response(ion(BGK(ν = 0); κT = 0.2), ω, k) ≈ charge_response(ion(GordeyevSeries(); κT = 0.2), ω, k) rtol = 1e-12
+    end
+    # number conservation: k → 0 keeps the collisionless E×B density response; the collisional change is the
+    # polarisation, O(k²) against the O(κn k) E×B charge, so the relative difference falls linearly with k
+    reldiff(ky) = (k0 = Wavevector(; ky); a = charge_response(ion(BGK(ν = 1.5)), 0.4 + 0.02im, k0);
+                   b = charge_response(ion(GordeyevSeries()), 0.4 + 0.02im, k0); abs(a - b) / abs(b))
+    @test reldiff(1e-6) < 1e-5
+    @test reldiff(1e-4) / reldiff(1e-3) ≈ 0.1 rtol = 0.01
+    # independent check at k⊥ = 0: velocity quadrature of (-iω + ik∥v + ν)δf = -ik∥vFφ + ν δn F (q = m = T = 1)
+    let kz = 0.5, ν = 0.3, ω = 0.8 + 0.05im
+        ω̃ = ω + im * ν
+        F(v) = exp(-v^2 / 2) / sqrt(2π)
+        I1 = quadgk(v -> -kz * v * F(v) / (kz * v - ω̃), -Inf, Inf; rtol = 1e-12)[1]
+        I0 = quadgk(v -> F(v) / (im * (kz * v - ω̃)), -Inf, Inf; rtol = 1e-12)[1]
+        @test charge_response(ion(BGK(ν = ν); κn = 0.0), ω, Wavevector(0.0, 0.0, kz)) ≈ I1 / (1 - ν * I0) rtol = 1e-9
+    end
+    # the same sum by orbit quadrature (needs Im ω̃ > 0, which ν provides even for real ω)
+    @test charge_response(ion(BGK(GordeyevIntegral(); ν = 0.2)), 2.3, Wavevector(ky = 1.5)) ≈
+          charge_response(ion(BGK(ν = 0.2)), 2.3, Wavevector(ky = 1.5)) rtol = 1e-8
+    @test_throws ArgumentError BGK(Cold(); ν = 1)
+    @test_throws ArgumentError BGK(DriftKinetic(polarization = true); ν = 1)
+
+    # resistive electrons: E×B (DriftKinetic at k∥ = 0) for α → 0, Boltzmann for α → ∞, their ω/iα-weighted mean between
+    ele(r) = Species(q = -1, T = 10.0, m = 1 / 1836, κn = -0.3, response = r)
+    k, ω = Wavevector(ky = 2.5), 4.1 + 0.03im
+    ρE, ρB = charge_response(ele(DriftKinetic()), ω, k), charge_response(ele(Boltzmann()), ω, k)
+    @test charge_response(ele(Resistive(α = 0)), ω, k) ≈ ρE rtol = 1e-13
+    @test charge_response(ele(Resistive(α = 1e10)), ω, k) ≈ ρB rtol = 1e-8
+    @test charge_response(ele(Resistive(α = 0.7)), ω, k) ≈ (ω * ρE + 0.7im * ρB) / (ω + 0.7im) rtol = 1e-13
+    @test charge_response(ele(Resistive(α = 0, polarization = true)), ω, k) ≈
+          charge_response(ele(DriftKinetic(polarization = true)), ω, k) rtol = 1e-13
+    @test_throws ArgumentError nonadiabatic_response(ele(Resistive(α = 1)), ω, k)
+    @test_throws ArgumentError nonadiabatic_response(ion(BGK(ν = 1)), ω, k)
+end
